@@ -67,6 +67,7 @@ const GAME_KEYS: ReadonlySet<string> = new Set([
   'KeyW', 'KeyA', 'KeyS', 'KeyD',
   'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
   'ShiftLeft', 'ShiftRight',
+  'KeyJ', // punch
 ]);
 
 const IGNORE_SELECTOR = '.lil-gui, input, select, textarea, a, button';
