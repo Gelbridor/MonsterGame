@@ -1,0 +1,94 @@
+// Every tunable number in one place. The debug panel edits this object live,
+// so modules must read values from `config` each time they use them rather
+// than copying them once at start-up (unless noted as "restart required").
+//
+// Units are real-world: 1 unit = 1 m, masses in kg, time in seconds.
+
+export const config = {
+  physics: {
+    /** Fixed physics step (s). 60 Hz. Restart required. */
+    timestep: 1 / 60,
+    /** Max fixed steps per rendered frame before we drop time (spiral-of-death guard). */
+    maxStepsPerFrame: 5,
+    /** Gravity (m/s², positive number, applied downwards). */
+    gravity: 9.81,
+    /** Multiplier on gravity, for tuning. */
+    gravityScale: 1,
+  },
+
+  world: {
+    /** Ground plane edge length (m). Restart required. */
+    groundSize: 400,
+    /** Random seed for the blockout town. Restart required. */
+    seed: 1987,
+  },
+
+  monster: {
+    /** Basalt total height (m), capsule tip to tip. Restart required. */
+    height: 30,
+    /** Capsule radius (m). Restart required. */
+    radius: 5,
+    /** Body mass (kg), used later for impacts. ~ a 30 m rock beast. */
+    mass: 4.0e6,
+    /** Walking speed (m/s). */
+    walkSpeed: 7,
+    /** Running speed (m/s). */
+    runSpeed: 16,
+    /** How fast speed changes (m/s²). Low = heavy. */
+    acceleration: 14,
+    /** How fast speed drops with no input (m/s²). */
+    deceleration: 20,
+    /** Max turn rate (rad/s). Low = slow to turn. */
+    turnSpeed: 2.2,
+    /** Max step height the character controller climbs (m). */
+    stepHeight: 1.5,
+  },
+
+  camera: {
+    /** Vertical field of view (degrees). */
+    fov: 55,
+    /** Distance from the look-at point (m). Plan: ~45 m behind and above. */
+    distance: 45,
+    /** Default pitch (radians, positive = looking down). */
+    pitch: 0.42,
+    minPitch: -0.1,
+    maxPitch: 1.2,
+    /** Height on the monster the camera looks at (m above feet). */
+    lookAtHeight: 22,
+    /** Position smoothing (higher = snappier). */
+    followSharpness: 6,
+    /** Look sensitivity for mouse / touch drag (rad per pixel). */
+    lookSensitivity: 0.005,
+    /** Gamepad right-stick look speed (rad/s at full deflection). */
+    stickLookSpeed: 2.6,
+    /** Auto-swing the camera behind Basalt while moving (0 = off). */
+    autoFollowStrength: 1.2,
+    near: 0.5,
+    far: 2000,
+  },
+
+  render: {
+    /** Cap on devicePixelRatio. Overridden by the quality preset at start-up. */
+    maxPixelRatio: 2,
+    /** Fog density for the night haze. */
+    fogDensity: 0.0028,
+    /** Tone mapping exposure. */
+    exposure: 1.0,
+  },
+
+  input: {
+    /** Stick / joystick dead zone (0..1). */
+    deadZone: 0.15,
+    /** Virtual joystick radius on touch screens (CSS px). */
+    touchStickRadius: 60,
+  },
+
+  debug: {
+    /** Show the stats overlay (fps, bodies, joints, draw calls). */
+    showStats: true,
+    /** Draw physics collider wireframes. */
+    showColliders: false,
+  },
+};
+
+export type Config = typeof config;
