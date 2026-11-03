@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en-GB">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d12" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>Monster Brawl</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d12; color: #e8e8e8;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+        -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+      #app { position: fixed; inset: 0; }
+      #app canvas { display: block; width: 100%; height: 100%; }
+      #loading { position: fixed; inset: 0; display: grid; place-items: center; font-size: 14px;
+        letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.8; pointer-events: none; }
+      #loading.error { color: #ff8a7a; text-transform: none; letter-spacing: 0; padding: 24px; text-align: center; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="loading">Loading Monster Brawl…</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
