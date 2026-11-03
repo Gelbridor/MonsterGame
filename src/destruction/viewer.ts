@@ -13,6 +13,7 @@
 import * as THREE from 'three/webgpu';
 import { detectQuality, getQualityPreset } from '../core/quality';
 import { createRenderer } from '../render/renderer';
+import { config } from '../config';
 import { createPhysics } from '../physics/world';
 import { buildTown } from '../city/town-layout';
 import { createDestructionRenderer } from './piece-render';
@@ -249,6 +250,7 @@ async function main(): Promise<void> {
 
   function cam(cx: number, cy: number, cz: number, tx: number, ty: number, tz: number, fov = 45): void {
     ctx.camera.fov = fov;
+    config.camera.fov = fov; // keep ctx.render() from seeing a frustum change (CSM would update before its first build)
     ctx.camera.updateProjectionMatrix();
     ctx.camera.position.set(cx, cy, cz);
     ctx.camera.lookAt(tx, ty, tz);
