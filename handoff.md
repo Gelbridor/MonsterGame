@@ -12,17 +12,17 @@ This session's work is in **local branches only, not pushed**. The sections belo
 | Branch | State |
 | --- | --- |
 | `graphics-polish` | From `main`. Reviewed merges of the Basalt polish (lava contrast, visible head, planted feet measured slide-free: walking skid 10.7 cm → 0 cm) and city polish round 1 (no frost sheen, smooth puddles, footprint-filtered setts). **Not yet on `main`.** |
-| `worktree-agent-a96c3546a9ac30ae6` | City polish **round 2**, in progress: GTAO blotches on the plaza at high/ultra (root cause in `src/render/post.ts`), and puddles to be concentrated at kerbs and dips and made dark mirrors rather than black tar. |
+| `wip/city-polish-r2` (`b134581`) | City polish round 2, **WIP, unreviewed**. AO now rebuilds normals from depth, which removed the plaza mottling at high/ultra. Puddles sit at the kerbs, the memorial base and dips. Still to do: pale "ice" puddles at the plaza's left edge, from env reflection. Puddle specular was cut to 0.1 but that was never re-shot. The `r2-*` shots in the old scratchpad predate the final tuning. |
 | `phase-2-destruction` | From `graphics-polish`. Holds the Phase 2 contracts in `src/destruction/types.ts` and the `config.destruction` tunables. |
-| `p2-sim` | Phase 2 physics side, in progress: building graph, bond stress, wake/sleep, debris/rubble, debug punch, wiring. |
-| `p2-vis` | Phase 2 visuals side, in progress: Voronoi fracture, piece renderer, `hideBuilding`, rubble baking, piece materials. |
+| `p2-sim` (`d974503`) | Phase 2 physics, **WIP**. Has the generator, material table, bond stress solver, group splitting, wake/sleep, debris pool/caps, contact-force events, static-collider removal and punch input (J, gamepad X, touch). Harness: `node scripts/run-harness.cjs t1`. Test 1 passes: a terrace punch removes 8 pieces and the building stands. Final edits are not type-checked. **Open bug:** removing a tower's ground columns does not collapse it; dump bond utilisation next. Not done: `main.ts` wiring, `mb.punchAt`, panel META/stats rows, tests 3–4 (stability, ms per step), and the 1–2 ms/step idle cost of woken buildings. `core/types.ts` gained `Physics.drainContactForces`, `Physics.removeStaticCollider`, `InputSnapshot.punch` and four `FrameStats` fields. |
+| `p2-vis` (`a30b2bb`) | Phase 2 visuals, builds clean. Has `fracture.ts` (0.27 ms/piece; cells tile the box exactly), `piece-render.ts` (batched per look; `hideBuilding` via degenerate index ranges; rubble baked into chunked static meshes; shard budget 2× `maxActiveChunks`), `piece-materials.ts` (piece-local; palettes copied from `city/materials.ts`) and a dev viewer at `src/destruction/viewer.html`. Not done: the mock tower's glass is too bright; no draw-call count for 1,000 shards; no high-tier or real-game `hideBuilding` check; inner break faces not inspected. |
 
 **Phase 2 design decision:** Rapier 0.21 has no joint-force read-back. So instead of one Rapier fixed joint per bond, connected pieces form compound rigid bodies, and bond stress is computed from real weight and bending moment on the bond graph, plus contact-force events for impacts. Collapse is still real Rapier dynamics. See the header of `src/destruction/types.ts`.
 
 **Next:**
-1. Review and merge city round 2 into `graphics-polish`, then run the whole-scene check.
+1. Re-shoot `wip/city-polish-r2` (default camera on all tiers, plaza close-up), fix the ice puddles, merge into `graphics-polish`, then run the whole-scene check.
 2. Merge `graphics-polish` into `main`; this deploys to Pages.
-3. Review `p2-sim` and `p2-vis`, merge both into `phase-2-destruction`, and swap `debug-render.ts` for `piece-render.ts` in `main.ts`.
+3. Finish `p2-sim` (tower collapse bug first, then wiring), merge `p2-vis` and `p2-sim` into `phase-2-destruction`, and use `piece-render.ts` in `main.ts` instead of `debug-render.ts`.
 4. Run the Phase 2 gate checks.
 
 **Machine notes (Windows):**
