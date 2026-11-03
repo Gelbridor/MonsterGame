@@ -116,7 +116,7 @@ export const config = {
     shardsMin: 4,
     shardsMax: 12,
     /** Debug punch: damage, radius (m) and impulse (N*s). */
-    punchDamage: 100,
+    punchDamage: 200,
     punchRadius: 4,
     punchImpulse: 2.0e6,
     /** Debug punch centre: metres in front of Basalt's feet (along its facing) and height above them. */

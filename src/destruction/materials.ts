@@ -8,7 +8,7 @@ import type { MatKey } from '../city/town-layout';
 export interface MaterialDef {
   /** kg/m^3, effective. */
   density: number;
-  /** Health of a typical piece before detaching (damage units; the punch deals 100 at its centre). */
+  /** Health of a typical piece before detaching (damage units; the punch deals 200 at its centre). */
   health: number;
   /** Compressive strength (Pa) used for bond limits. */
   strength: number;
