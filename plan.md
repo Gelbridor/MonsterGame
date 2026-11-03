@@ -1,10 +1,25 @@
-# Monster Brawl — Destruction Tech Demo Plan
+# Monster Brawl: destruction tech demo plan
 
-Nov 2, 2026 · @Tommy
+Owner: @Tommy · Created 2 Nov 2026 · Last revised 3 Nov 2026
+
+This is the design document. It says **what** to build and **in what order**.
+For the current state of the code, open faults and how to pick up the work, read [`handoff.md`](handoff.md).
+
+## Status
+
+| Phase | State |
+| --- | --- |
+| 1 · Foundations | Built and live on GitHub Pages. **Gate not yet signed off** (awaiting a phone test). |
+| Graphics pass (pulled forward from Phase 5) | Built at the owner's request and live. A polish round is outstanding; see `handoff.md`. |
+| 2 · Destruction core | Not started. **Next after the Phase 1 gate.** |
+| 3 · Scale and performance | Not started |
+| 4 · Moves and game feel | Not started |
+| 5 · Effects, audio and polish | Not started (except the graphics pass) |
 
 ## Vision and goals
 
-The demo proves one thing: smashing a city as a giant monster in a browser can feel as weighty and satisfying as the PS2 classic, with modern visuals. One monster, one city block, no opponent yet.
+The demo proves one thing: smashing a city as a giant monster in a browser can feel as weighty and satisfying as the PS2 classic, with modern visuals.
+It has one monster, one town and no opponent yet.
 
 **Destruction-first pillars**
 
@@ -14,49 +29,66 @@ The demo proves one thing: smashing a city as a giant monster in a browser can f
 4. **Real physics, not scripts.** Buildings fall because gravity overloads their joints, not because an animation plays. Leaning, pancaking and toppling all come from the simulation.
 5. **It runs on a phone.** Phones run the same physics rules with coarser pieces. A mid-range phone holds 30 fps and a PC holds 60.
 
-**In scope for the demo:** one original monster, about a 400 m × 400 m British town centre at night, 25 to 40 destructible buildings, vehicles and street props, punch/stomp/grab/throw/charge moves, dust, fire, glass, sparks and screen shake.
+**In scope:**
+- one original monster
+- a British town centre at night, about 400 m × 400 m, with 25 to 40 destructible buildings, vehicles and street props
+- punch, stomp, grab, throw and charge moves
+- dust, fire, glass, sparks and screen shake
 
-**Out of scope (later builds):** a second monster or AI opponent, police or army units, multiplayer, menus, story, multiple cities, power-ups.
+**Out of scope (later builds):** a second monster or AI opponent, police or army units, multiplayer, menus, story, multiple cities and power-ups.
 
-**Originality:** the monster, city, name and audio are all new. Nothing is copied from the original game's characters, levels or branding. The working title is *Monster Brawl* until you pick a name.
+**Originality:** the monster, city, name and audio are all new. Nothing is copied from the original game's characters, levels or branding.
 
 ## Tech stack and performance budget
 
-The game uses Three.js for rendering, Rapier for physics, and Vite for builds, and is published as a single web link.
+The game uses Three.js for rendering, Rapier for physics and Vite for builds, and is published as a single web link.
 
 | Layer | Choice | Why |
 | --- | --- | --- |
-| Rendering | Three.js, WebGPU renderer with WebGL 2 fallback | Modern lighting and post-processing; works on iPhone Safari and desktop Chrome |
+| Rendering | Three.js `WebGPURenderer` with TSL node materials; automatic WebGL 2 fallback | Modern lighting and post-processing; works on iPhone Safari and desktop Chrome |
 | Physics | Rapier (Rust compiled to WebAssembly) | Fast rigid bodies, can sleep thousands of idle chunks, deterministic |
 | Fracture | Pre-fractured shards linked by breakable physics joints; extra runtime fracture on PC | Real-time fracturing is too slow on phones; pre-cut pieces look the same |
 | Effects | GPU particles (instanced), decals, volumetric-style dust sprites | Thousands of particles for little CPU cost |
 | Audio | Web Audio API with layered, pitch-varied samples | Every impact sounds different |
 | Build | Vite + TypeScript | Quick reloads while tuning; small output |
-| Assets | Procedural buildings in code first; glTF models later | Gets to playable fast without an artist |
-| Hosting | Published artifact link (later: GitHub Pages or itch.io) | Open on phone or PC instantly |
+| Assets | Procedural buildings and materials in code first; glTF models later | Gets to playable fast without an artist |
+| Hosting | GitHub Pages, deployed on every push to `main` (itch.io later) | Open on phone or PC instantly |
 
-**Performance budget (per frame)**
+### Performance budget per quality tier
 
-| Target | Frame rate | Active physics chunks | Particles | Shadow quality |
-| --- | --- | --- | --- | --- |
-| PC (Ultra) | 60 fps | 1,500 | 20,000 | 2,048 px cascaded |
-| PC (High) | 60 fps | 800 | 10,000 | 2,048 px |
-| Phone (Medium) | 30 to 60 fps | 300 | 3,000 | 1,024 px, monster only |
-| Phone (Low) | 30 fps | 150 | 1,000 | Blob shadows |
+`src/core/quality.ts` implements these tiers and picks one automatically. The URL option `?quality=` overrides it.
+
+| Tier | Target | Active physics chunks | Particles | Shadows | Post-processing | Real lights | Rain drops |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Ultra (PC) | 60 fps | 1,500 | 20,000 | 4 cascades × 2,048 px, whole city | Bloom, GTAO, SSR, SMAA, filmic grade | 48 | 24,000 |
+| High (PC) | 60 fps | 800 | 10,000 | 3 cascades × 2,048 px, whole city | As Ultra, AO/SSR at half resolution | 24 | 12,000 |
+| Medium (phone) | 30–60 fps | 300 | 3,000 | 1,024 px, monster only | Bloom, FXAA, filmic grade | 8 | 4,000 |
+| Low (phone) | 30 fps | 150 | 1,000 | None (blob shadows later) | None | 4 | 1,500 |
 
 Idle debris is put to sleep and, after a delay, merged into one static rubble mesh. That keeps a fully wrecked city cheap to draw.
 
 ## Destruction system
 
-Each building is a graph of breakable pieces linked by joints. A hit damages pieces, broken pieces fall away, and a support check each frame decides what else falls with them.
+Each building is a graph of breakable pieces linked by joints.
+A hit damages pieces, broken pieces fall away, and a support check each step decides what else falls with them.
 
-&#91;embedded content: damage-to-collapse loop · 8 steps\]
+**The damage-to-collapse loop**
 
-The loop back from “Impact on landing” is what turns one punch into a district-wide collapse. Debris that comes to rest is merged so a fully wrecked city stays cheap to draw.
+1. **Hit:** an attack, thrown object or falling mass creates a damage shape with a damage value and impulse.
+2. **Damage:** pieces inside the shape lose health according to distance. Hurt pieces show cracks.
+3. **Detach:** a piece at 0 health detaches. Its shards become live bodies and fly off with the impulse.
+4. **Wake:** the building wakes from one static body into its full jointed form.
+5. **Stress:** every physics step reads the load on each joint. Joints over their material strength break.
+6. **Collapse:** unsupported sections fall under gravity, pancaking, leaning or toppling.
+7. **Impact on landing:** falling mass hits with real momentum and becomes a new hit (step 1) for whatever it lands on.
+8. **Settle:** debris that comes to rest sleeps and is merged into static rubble.
+
+The loop back from step 7 to step 1 is what turns one punch into a district-wide collapse.
+Step 8 keeps a fully wrecked city cheap to draw.
 
 ### 1. How a building is built
 
-- **Floors × bays grid.** A building is generated as a grid: for example 12 floors × 4 × 4 bays. Each cell holds a few pieces: a floor slab, corner columns, wall panels and windows.
+- **Floors × bays grid.** A building is generated as a grid, for example 12 floors × 4 × 4 bays. Each cell holds a few pieces: a floor slab, corner columns, wall panels and windows.
 - **Pre-fractured pieces.** Each wall panel and slab is pre-split into 4 to 12 Voronoi shards, created once when the level loads. While intact, the shards render as one merged mesh, so an untouched building costs about 1 draw call.
 - **Support graph.** Every piece knows what holds it up (the column or slab below it) and what it holds up. The ground floor's columns connect to the ground.
 - **Materials** decide health, mass and effects:
@@ -71,10 +103,10 @@ The loop back from “Impact on landing” is what turns one punch into a distri
 
 ### 2. Taking damage
 
-- Each attack has a **damage shape** (a sphere for punches, a ring for stomps, a capsule for a charge or a thrown car) with a damage value and an impulse.
-- Pieces inside the shape lose health according to distance. A piece at 0 health **detaches**: its shards become live Rapier bodies and fly off with the impulse.
-- Pieces that are hurt but not broken get **crack decals** and darker textures, so damage builds up visibly over time.
-- Glass breaks in a radius around any hit, even a small one. A whole façade can shatter in one shockwave.
+- **Damage shapes.** Each attack has one: a sphere for punches, a ring for stomps, a capsule for a charge or a thrown car. Each carries a damage value and an impulse.
+- **Detaching.** Pieces inside the shape lose health according to distance. A piece at 0 health **detaches**: its shards become live Rapier bodies and fly off with the impulse.
+- **Visible wear.** Pieces that are hurt but not broken get **crack decals** and darker textures, so damage builds up visibly over time.
+- **Glass.** Glass breaks in a radius around any hit, even a small one. A whole façade can shatter in one shockwave.
 
 ### 3. Structural collapse
 
@@ -92,10 +124,10 @@ Collapse is fully simulated. Nothing is scripted or animated.
 
 ### 4. Debris and rubble
 
-- Shards stay physical for 3 to 8 seconds, then **sleep**. Sleeping shards near each other are **merged into one static rubble mesh** with a simple collider.
-- Rubble piles keep their height, so streets fill up and the city stays visibly wrecked.
-- Large chunks (slab pieces, columns) can be **grabbed and thrown** like cars.
-- **Object pooling:** shard bodies and particle emitters come from fixed pools that never allocate during play. When a pool runs out, the oldest debris is merged early. This is how the frame rate stays steady.
+- **Lifetime.** Shards stay physical for 3 to 8 seconds, then **sleep**. Sleeping shards near each other are **merged into one static rubble mesh** with a simple collider.
+- **Piles.** Rubble piles keep their height, so streets fill up and the city stays visibly wrecked.
+- **Throwable chunks.** Large chunks (slab pieces, columns) can be **grabbed and thrown** like cars.
+- **Object pooling.** Shard bodies and particle emitters come from fixed pools that never allocate during play. When a pool runs out, the oldest debris is merged early. This is how the frame rate stays steady.
 
 ### 5. Effects that sell it
 
@@ -112,16 +144,27 @@ Collapse is fully simulated. Nothing is scripted or animated.
 
 ### 6. Vehicles and props
 
-- Cars, buses, tanks and lamp posts are rigid bodies that crumple with a few damage-state meshes and squash a little on impact.
-- Cars **explode** after taking enough damage and set off a small damage sphere, which can trigger chain explosions in a car park.
+- **Crumpling.** Cars, buses, tanks and lamp posts are rigid bodies that crumple with a few damage-state meshes and squash a little on impact.
+- **Explosions.** Cars **explode** after taking enough damage and set off a small damage sphere, which can trigger chain explosions in a car park.
 
 ### 7. Tuning controls
 
-A debug panel (press backtick, or tap with three fingers on a phone) exposes building health, column load limit, debris lifetime, chunk count, joint strength per material, gravity scale and effect density. These values can be tuned live while playing.
+The debug panel opens with the backtick key, a gamepad's Back/Select, or a three-finger tap on a phone.
+It edits `src/config.ts` live, and "Copy config JSON" exports tuned values.
+From Phase 2 it must also expose:
+- building health
+- column load limit
+- joint strength per material
+- debris lifetime
+- chunk count
+- effect density
+
+It already exposes gravity scale, movement, camera, render and weather values.
 
 ## City and environment
 
-The arena is a fictional northern English town centre on a rainy night, about 400 m square, bordered by a canal and a Victorian railway viaduct. The monster is 30 m tall, so brick terraces reach its knees and a 1960s tower block reaches its chest.
+The arena is a fictional northern English town centre on a rainy night, about 400 m square, bordered by a canal and a Victorian railway viaduct.
+The monster is 30 m tall, so brick terraces reach its knees and a 1960s tower block reaches its chest.
 
 **Building types** (all procedurally generated, so each block looks different):
 
@@ -136,17 +179,27 @@ The arena is a fictional northern English town centre on a rainy night, about 40
 | Church with spire | 1 + spire | 1 | Spire snaps at its base and shatters |
 | Gasholder + substation | n/a | 1 each | Gas fireball; power cuts across nearby streets |
 
-**Props:** red double-decker buses, black cabs, about 60 cars, a train on the viaduct, red phone boxes, post boxes, bus shelters, lamp posts, traffic lights, pub signs and trees. Every prop is a physics object.
+**Props:**
+- red double-decker buses, black cabs, about 60 cars, and a train on the viaduct
+- red phone boxes, post boxes, bus shelters, lamp posts, traffic lights, pub signs and trees
 
-**Lighting and mood:** rain is on by default. Orange sodium and white LED street lights reflect off wet tarmac and cobbles, with warm pub windows and shop signs. As the town burns, fires and Basalt's lava cracks become the main light sources.
+Every prop is a physics object from Phase 3. The graphics pass added these as static, instanced dressing first.
+
+**Lighting and mood:**
+- Rain is on by default.
+- Orange sodium and white LED street lights reflect off wet tarmac and cobbles.
+- Pub windows and shop signs are warm.
+- As the town burns, fires and Basalt's lava cracks become the main light sources.
 
 ## Monster and controls
 
-The first monster is **Basalt**, a hulking lava-cored rock beast, about 30 m tall. Its glowing cracks give off light, and its heavy, slow-to-turn movement suits a destruction showcase. Two alternative concepts are listed in the open questions below.
+The first monster is **Basalt**, a hulking lava-cored rock beast about 30 m tall. Its glowing cracks give off light.
+Its heavy, slow-to-turn movement suits a destruction showcase.
 
-**Model:** built first from simple shapes and procedural rock material, with a bone rig and procedural animation (stepping, leaning, arm swings). Hand-made models and motion-captured animation can come later.
+**Model:** a hunched rock golem built procedurally from basalt-column bundles and rock chunks on a bone rig, with a procedural rock-and-lava material.
+It has procedural animation (foot-planted walk and run, leaning, arm swings, idle breathing). Hand-made models and motion-captured animation can come later.
 
-**Move set**
+**Move set** (Phase 4)
 
 | Move | Keyboard / pad | Phone | What it does to the city |
 | --- | --- | --- | --- |
@@ -161,57 +214,79 @@ The first monster is **Basalt**, a hulking lava-cored rock beast, about 30 m tal
 | Special: Magma Burst | Q / LT+RT | Special button (fills from destruction) | Huge radial blast, the biggest collapse trigger in the demo |
 | Roar | R / D-pad | Roar button | Camera push-in, shakes nearby windows loose |
 
-**Destruction meter:** destroying things fills the special-move bar and adds to a score shown as £ of damage, like an insurance bill. This gives the demo a reason to keep smashing.
+Phase 1 binds Shift, RT and RB to **run**. Shoulder charge takes Shift and RB in Phase 4, so give run a new binding then: a double-tap, or L3 and RT on a pad.
 
-**Camera:** third-person, about 45 m behind and above. It pulls back during collapses so you see the whole fall, and briefly slows to 30% speed when a skyscraper goes over (on by default; can be turned off in settings).
+**Destruction meter:** destroying things fills the special-move bar and adds to a score shown as £ of damage, like an insurance bill.
+This gives the demo a reason to keep smashing.
+
+**Camera:** third-person, about 45 m behind and above (pulled back further on portrait phone screens).
+It pulls back during collapses so you see the whole fall, and briefly slows to 30 % speed when a skyscraper goes over. Slow motion is on by default and can be turned off in settings.
 
 **Input:** keyboard and mouse, any standard gamepad (Gamepad API), and touch controls with a virtual stick and four large buttons.
 
 ## Graphics and game feel
 
-The visual target is a stylised, cinematic night look: think modern kaiju film rather than photorealism. A stylised look hides the limits of browser rendering and stays sharp on phones.
+The visual target is a stylised, cinematic night look, like a modern kaiju film rather than photorealism.
+A stylised look hides the limits of browser rendering and stays sharp on phones.
+The graphics pass has implemented most of the rendering list below. What remains is the polish round in `handoff.md`.
 
 **Rendering features**
 
-- Physically based materials (concrete, glass, metal, wet tarmac) with an environment map for reflections
-- Cascaded shadows from the moon; point lights from fires and the monster's lava cracks
-- Post-processing: bloom (neon, fire, lava), tone mapping, ambient occlusion, depth haze, light film grain, motion blur on big hits (Ultra only)
+- Physically based, procedural materials (brick, sandstone, concrete, slate, glass, wet tarmac, cobbles) with an environment map for reflections
+- Cascaded shadows from the moon; point lights from street lamps, fires and the monster's lava cracks
+- A night sky with moonlit cloud and town-glow at the horizon; distance and height fog
+- Post-processing: bloom (neon, fire, lava), tone mapping, ambient occlusion, screen-space reflections on wet streets, light film grain and colour grade
+  - Still to do: motion blur on big hits (Ultra only)
 - Lit window interiors drawn as a cheap fake depth effect, so towers look occupied without real geometry
-- Instancing for windows, cars, debris and particles, so thousands of objects cost a few draw calls
+- Rain lit by street lamps, splashes and puddle ripples, and soft light cones under lamps
+- Instancing and geometry merging for windows, street furniture, debris and particles, so thousands of objects cost a few draw calls
 
-**Game feel ("juice")** — these matter more than polygon count:
+**Game feel ("juice")** (Phase 4). These matter more than polygon count:
 
 | Technique | Used on |
 | --- | --- |
 | Hit-stop (40 to 80 ms freeze) | Heavy punches, throws landing |
-| Screen shake scaled to distance and size | Stomps, collapses, explosions |
+| Screen shake scaled to distance and size | Stomps, collapses, explosions, Basalt's footsteps |
 | Slow motion (0.3× for 1.5 s) | Skyscraper topples, chain reactions |
 | Controller rumble | Every impact (gamepad and phone vibration) |
 | Camera kick toward the impact | Punches, charge |
 | Low-pass audio thump then rumble | Big collapses |
 
-**Audio:** layered impacts (crack + crumble + debris rain), glass tinkle, metal groans before a collapse, distant sirens, car alarms that start after nearby hits, and a roar. Sounds come from free licensed libraries or are synthesised. Music is a looping percussion track that gets more intense as the destruction meter rises.
+**Audio** (Phase 5):
+- Layered impacts (crack + crumble + debris rain), glass tinkle, metal groans before a collapse, distant sirens, car alarms that start after nearby hits, and a roar.
+- Sounds come from free licensed libraries or are synthesised.
+- Music is a looping percussion track that gets more intense as the destruction meter rises.
 
 ## Milestones
 
-Destruction comes first. Phases 2 and 3 make buildings fall and keep the frame rate steady before any time goes into moves or visual polish.
+Destruction comes first. Phases 2 and 3 make buildings fall and keep the frame rate steady before any time goes into moves or more visual polish.
+Each phase ends with a playable link on GitHub Pages. The owner tests the gate on their own phone and PC, and the next phase starts only when the gate passes.
 
-&#91;embedded content: build roadmap · 5 phases, 4 gates\]
+> The original roadmap diagram (5 phases, 4 gates) was lost when the plan was exported.
+> The phases below are reconstructed from the rest of this document. The owner should confirm them before Phase 2 starts.
 
-Each phase ends with a playable link. You test the gate on your own phone or PC, and the next phase starts only when it passes.
+| Phase | Builds | Gate (tested by the owner) |
+| --- | --- | --- |
+| **1 · Foundations** ✅ built | Vite + TS project, WebGPU renderer with WebGL 2 fallback, Rapier at a fixed 60 Hz, blockout town on a 400 m ground, Basalt with walk/run, follow camera, keyboard/gamepad/touch controls, debug panel and stats overlay | It runs on the owner's phone and PC; controls feel right; the stats overlay shows fps, bodies, joints and draw calls |
+| **2 · Destruction core** | Floors × bays building generator, Voronoi pre-fracture, breakable joints with per-step stress checks, materials, wake/sleep buildings, debris pools and rubble merging, plus a test damage sphere (debug punch). Destruction tunables in the debug panel | A punch takes out the piece it hits; removing supports makes the floors above fall under gravity alone; a full collapse of one tower block holds the tier frame rate on a phone |
+| **3 · Scale and performance** | The whole town destructible (25–40 buildings), momentum damage and chain collapses, cluster-first falling, hard chunk caps per tier, vehicles and props as physics objects, car explosions | A district-wide chain collapse holds 30 fps on a mid-range phone and 60 fps on PC; the town stays visibly wrecked afterwards |
+| **4 · Moves and game feel** | Full move set (punch combo, heavy punch, stomp, grab, throw, charge, climb, Magma Burst, roar), destruction meter and £ score, hit-stop, screen shake, slow motion, camera pull-back, rumble | Every move feels weighty on keyboard, gamepad and touch; smashing is satisfying |
+| **5 · Effects, audio and polish** | Dust, fire, sparks, glass, power cuts, ground cracks, audio and music, settings (slow motion on/off, quality), and finishing the graphics polish | Ships as the demo link |
 
 ## Risks and decisions
 
-The biggest risk is phone performance when many buildings fall at once. Debris pooling and rubble merging are built in phase 2, before the art is polished, for that reason. Fully simulated collapses cost more, so phones use coarser pieces that follow the same rules.
+The biggest risk is phone performance when many buildings fall at once.
+Debris pooling and rubble merging are built in Phase 2, before more polish, for that reason. Fully simulated collapses cost more, so phones use coarser pieces that follow the same rules.
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | Too many live physics bodies during a chain collapse | Frame rate drops to single digits | Hard cap on active chunks, early rubble merge, cluster-first falling |
-| WebGPU missing on some phones | Black screen or crash | Automatic WebGL 2 fallback, tested on iPhone and Android |
+| WebGPU missing or failing on some phones | Black screen or crash | Automatic WebGL 2 fallback, including a reload onto WebGL 2 if the WebGPU device is lost after start-up; test on iPhone and Android |
 | Collapse looks floaty or fake | Destruction feels cheap | Use true scale (30 m monster, real masses), correct gravity, heavy dust and slow motion. Never slow the physics itself |
 | Procedural buildings look samey | City feels like a test level | Varied façade kits, signage, rooftop clutter, colour variation |
-| Touch controls feel clumsy | Hard to play on phone | Large buttons, auto-aim for grab and throw, playtest on your phone |
-| Scope creep into a full game | Demo never ships | Fix demo scope (section 1); log new ideas for later builds |
+| Touch controls feel clumsy | Hard to play on phone | Large buttons, auto-aim for grab and throw, playtest on the owner's phone |
+| Graphics cost on phones | Phones miss 30 fps | Every effect is gated by the quality tier; Low has no post-processing |
+| Scope creep into a full game | Demo never ships | Fix demo scope (see Vision); log new ideas for later builds |
 
 **Decisions made**
 
@@ -222,76 +297,80 @@ The biggest risk is phone performance when many buildings fall at once. Debris p
 - [x] Slow-motion collapse moments: on by default, can be turned off in settings
 - [x] Police or army units: none in the demo; added in a later build
 - [x] Working title: *Monster Brawl* for now
+- [x] Graphics: as high quality as possible, held to a strict visual bar, pulled forward ahead of Phase 2 (owner's request, 3 Nov 2026)
+- [x] Ultra anti-aliasing: SMAA for now; TRAA needs rain drawn after the resolve
+- [x] Hosting: GitHub Pages from `main`
 
-## Handoff to Claude Code
+**Open questions**
 
-Export this doc as Markdown, save it in a new folder as `PLAN.md`, and give Claude Code the starter prompt below. It builds one phase at a time and stops at each gate for you to test.
+- [ ] Final name for the demo
+- [ ] Confirm the reconstructed Phase 2–5 roadmap above
+- [ ] Which phones to treat as the "mid-range" reference for the 30 fps target
+- [ ] Audio source: free libraries, synthesised, or commissioned
 
-**Project layout**
+## Building with Claude Code
+
+### Project layout
 
 ```text
-monster-brawl/
-  PLAN.md                  this document
+MonsterGame/
+  plan.md                  this document
+  handoff.md               current state, open faults, next steps
   index.html
-  package.json
-  vite.config.ts
+  package.json, vite.config.ts, tsconfig.json
+  .github/workflows/pages.yml   deploy to GitHub Pages on push to main
+  scripts/shot.cjs         headless screenshot harness for visual checks
+  docs/screenshots/        reference shots of the current look
   src/
-    main.ts                start-up: renderer, physics, game loop
+    main.ts                start-up: renderer, physics, town, monster, weather, game loop
     config.ts              every tunable number in one place
     core/
+      types.ts             shared contracts between modules
       loop.ts              fixed 60 Hz physics step, variable-rate rendering
       input.ts             keyboard, gamepad, touch
       quality.ts           Low / Medium / High / Ultra presets, auto-detect
     render/
-      renderer.ts          WebGPU with WebGL 2 fallback, post-processing
-      effects/             dust, fire, sparks, glass, crack decals
+      renderer.ts          WebGPU with WebGL 2 fallback, lights, shadows
+      sky.ts, environment.ts, post.ts   night sky, env map + fog, post-processing
+      effects/             rain, splashes, light cones, puddle ripples (later: dust, fire, sparks, glass, decals)
     physics/
-      world.ts             Rapier set-up, body and particle pools
-    destruction/
-      building-gen.ts      floors x bays building generator
+      world.ts             Rapier set-up (later: body and particle pools)
+    destruction/           Phase 2
+      building-gen.ts      floors × bays building generator
       fracture.ts          Voronoi pre-fracture of panels and slabs
       joints.ts            breakable joints, per-step stress check
       materials.ts         strength, mass and effects per material
       sleep.ts             wake/sleep buildings, rubble merging
     city/
-      town-layout.ts       British town centre layout
-      props.ts             buses, cabs, cars, phone boxes, lamp posts
+      town-layout.ts       British town layout → visuals + colliders
+      buildings.ts, landmarks.ts, materials.ts, dressing.ts, signage.ts, mesh-builder.ts
+      props.ts             Phase 3: buses, cabs, cars as physics objects
     monster/
-      basalt.ts            rig and procedural animation
-      moves.ts             damage shapes for each attack
+      basalt.ts            physics body and character controller
+      basalt-model.ts, basalt-geom.ts, rock-material.ts, basalt-anim.ts   model, material, procedural animation
+      moves.ts             Phase 4: damage shapes for each attack
     camera/
-      follow-camera.ts     follow, pull-back on collapses, slow motion
-    audio/                 layered impact sounds, music intensity
+      follow-camera.ts     follow (later: pull-back on collapses, slow motion)
+    audio/                 Phase 5: layered impact sounds, music intensity
     debug/
       panel.ts             live tuning panel and stats overlay
   public/                  textures, sounds, models
 ```
 
-**Dependencies:** `three`, `@dimforge/rapier3d-compat`, `lil-gui`, `vite`, `typescript`.
+**Dependencies:** `three`, `@dimforge/rapier3d-compat`, `lil-gui`, `vite`, `typescript` (with `@types/three`).
 
-**Conventions**
+### Conventions
 
-- Units are real-world: 1 unit = 1 m, masses in kg, gravity 9.81 m/s². Basalt is 30 m tall.
-- Every tunable value lives in `src/config.ts`, and the debug panel edits it live.
-- A stats overlay (fps, active bodies, live joints, draw calls) is on from Phase 1.
-- Test on your phone with `npm run dev -- --host` on home Wi-Fi, or a GitHub Pages build.
-- Make one git commit per passed gate.
+- **Units are real-world:** 1 unit = 1 m, masses in kg, gravity 9.81 m/s². Basalt is 30 m tall.
+- **Tunables:** every tunable value lives in `src/config.ts`, and the debug panel edits it live.
+- **Quality tiers:** every expensive feature is gated by a field on the quality preset.
+- **Stats overlay:** fps, active bodies, live joints and draw calls are always shown.
+- **Testing:** the owner tests on their phone via the GitHub Pages link, or with `npm run dev -- --host` on home Wi-Fi.
+- **Commits:** one commit per passed gate on `main`.
 
-**Starter prompt (Phase 1)**
+### Prompt for each phase
 
 ```text
-Read PLAN.md in this repo. It is the design for Monster Brawl, a browser
-giant-monster destruction demo. Build Phase 1 (Foundations) only:
-
-- Vite + TypeScript project using the layout in the Handoff section
-- Three.js WebGPU renderer with automatic WebGL 2 fallback
-- Rapier physics with a fixed 60 Hz step
-- A blockout British town of box buildings on a 400 m ground plane
-- Basalt as a 30 m capsule with walk and run, a follow camera,
-  and keyboard, gamepad and touch controls
-- The debug panel and stats overlay
-
-Stop at the Phase 1 gate and tell me how to test it on my phone.
+Read plan.md and handoff.md. Build Phase N from plan.md. Meet its gate,
+show me the stats overlay numbers, then stop and tell me how to test it on my phone.
 ```
-
-**Later phases:** `Build Phase N from PLAN.md. Meet its gate, show me the stats overlay numbers, then stop.`

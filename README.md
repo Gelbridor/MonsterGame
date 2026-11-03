@@ -2,7 +2,7 @@
 
 A browser giant-monster destruction tech demo. Design: [`plan.md`](plan.md).
 
-**Status:** Phase 1 (Foundations): blockout town, Basalt capsule, controls, debug tools. No destruction yet.
+**Status:** Phase 1 (Foundations) plus a graphics pass. No destruction yet. Current state and next steps: [`handoff.md`](handoff.md).
 
 ## Run it
 
