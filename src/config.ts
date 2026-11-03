@@ -103,6 +103,24 @@ export const config = {
     wetness: 0.85,
   },
 
+  destruction: {
+    /** Health multiplier on every piece. */
+    healthScale: 1,
+    /** Multiplier on every bond's force and moment limit (lower = collapses sooner). */
+    bondStrengthScale: 1,
+    /** Distance (m) from a damage shape within which a sleeping building wakes. */
+    wakeRadius: 12,
+    /** Seconds a debris shard stays physical before it may sleep and be merged into rubble. */
+    debrisLifetime: 5,
+    /** Shards per fractured piece (min/max; the quality tier scales this down). */
+    shardsMin: 4,
+    shardsMax: 12,
+    /** Debug punch: damage, radius (m) and impulse (N*s). */
+    punchDamage: 100,
+    punchRadius: 4,
+    punchImpulse: 2.0e6,
+  },
+
   input: {
     /** Stick / joystick dead zone (0..1). */
     deadZone: 0.15,
