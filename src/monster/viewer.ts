@@ -65,7 +65,7 @@ async function main() {
 
   const camera = new THREE.PerspectiveCamera(config.camera.fov, window.innerWidth / window.innerHeight, 0.5, 2000);
 
-  const input = { moveX: 0, moveY: 0, lookX: 0, lookY: 0, run: false, device: 'keyboard' as const };
+  const input = { moveX: 0, moveY: 0, lookX: 0, lookY: 0, run: false, punch: false, device: 'keyboard' as const };
   const dt = config.physics.timestep;
   let simTime = 0;
 

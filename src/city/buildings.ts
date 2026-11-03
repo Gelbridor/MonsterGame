@@ -1062,6 +1062,9 @@ export function buildBuildingVisual(spec: BuildingSpec, ctx: BuildCtx): void {
   for (const m of Object.values(ctx.b)) (m as MeshBuilder).clearFrame();
 }
 
+/** Static collider handles per building id, so Phase 2 can remove a building's boxes when it wakes. */
+export const buildingColliders = new Map<number, unknown[]>();
+
 /** Colliders: identical to the original blockout (same boxes per spec). */
 export function addBuildingColliders(
   spec: BuildingSpec,
@@ -1069,10 +1072,12 @@ export function addBuildingColliders(
 ): void {
   const cs = Math.cos(spec.yaw);
   const sn = Math.sin(spec.yaw);
+  const handles: unknown[] = [];
+  buildingColliders.set(spec.id, handles);
   const box = (lx: number, baseY: number, lz: number, w: number, h: number, d: number): void => {
     const wx = spec.x + lx * cs + lz * sn;
     const wz = spec.z - lx * sn + lz * cs;
-    physics.addStaticBox({ x: wx, y: baseY + h / 2, z: wz }, { x: w / 2, y: h / 2, z: d / 2 }, spec.yaw);
+    handles.push(physics.addStaticBox({ x: wx, y: baseY + h / 2, z: wz }, { x: w / 2, y: h / 2, z: d / 2 }, spec.yaw));
   };
   const { width: w, depth: d, height: h } = spec;
   switch (spec.type) {
@@ -1100,7 +1105,7 @@ export function addBuildingColliders(
       const capH = 8;
       const cx = spec.x + tz * sn;
       const cz = spec.z + tz * cs;
-      physics.addStaticBox({ x: cx, y: towerH + capH / 2 - 1, z: cz }, { x: 2.5, y: capH / 2 - 1, z: 2.5 }, spec.yaw);
+      handles.push(physics.addStaticBox({ x: cx, y: towerH + capH / 2 - 1, z: cz }, { x: 2.5, y: capH / 2 - 1, z: 2.5 }, spec.yaw));
       break;
     }
     case 'carPark':
@@ -1116,7 +1121,7 @@ export function addBuildingColliders(
       const sx = spec.x + tz * sn;
       const sz = spec.z + tz * cs;
       const steps: Array<[number, number, number]> = [[3.2, 26, 6], [2.2, 32, 6], [1.2, 38, 6]];
-      for (const [hw, y0, hh] of steps) physics.addStaticBox({ x: sx, y: y0 + hh / 2, z: sz }, { x: hw, y: hh / 2, z: hw }, spec.yaw);
+      for (const [hw, y0, hh] of steps) handles.push(physics.addStaticBox({ x: sx, y: y0 + hh / 2, z: sz }, { x: hw, y: hh / 2, z: hw }, spec.yaw));
       break;
     }
     case 'substation':

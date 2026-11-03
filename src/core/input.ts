@@ -226,6 +226,7 @@ export function createInput(target: HTMLElement): Input {
     lookX: 0,
     lookY: 0,
     run: false,
+    punch: false,
     device: 'keyboard',
   };
 
@@ -577,6 +578,7 @@ export function createInput(target: HTMLElement): Input {
 
   // ---- gamepad
   let padBackPrev = false;
+  let padPunch = false;
   let padIndexPrev = -1;
 
   function pickPad(): Gamepad | null {
@@ -666,6 +668,8 @@ export function createInput(target: HTMLElement): Input {
       const back = padBtn(pad, 8) > 0.5;
       if (back && !padBackPrev) fireDebug();
       padBackPrev = back;
+      padPunch = padBtn(pad, 2) > 0.5; // X (west) button
+      if (padPunch) active = true;
 
       if (!active) {
         for (let i = 0; i < pad.buttons.length; i++) {
@@ -679,6 +683,7 @@ export function createInput(target: HTMLElement): Input {
     } else {
       padIndexPrev = -1;
       padBackPrev = false;
+      padPunch = false;
     }
 
     // clamp movement vector to the unit disc
@@ -693,6 +698,7 @@ export function createInput(target: HTMLElement): Input {
     snap.lookX = lx;
     snap.lookY = ly;
     snap.run = run;
+    snap.punch = keys.has('KeyJ') || actions.punch || padPunch;
     return snap;
   }
 

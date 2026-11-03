@@ -106,6 +106,38 @@ export const config = {
     wetness: 0.85,
   },
 
+  destruction: {
+    /** Health multiplier on every piece. */
+    healthScale: 1,
+    /** Multiplier on every bond's force and moment limit (lower = collapses sooner). */
+    bondStrengthScale: 1,
+    /** Distance (m) from a damage shape within which a sleeping building wakes. */
+    wakeRadius: 12,
+    /** Seconds a debris shard stays physical before it may sleep and be merged into rubble. */
+    debrisLifetime: 5,
+    /** Shards per fractured piece (min/max; the quality tier scales this down). */
+    shardsMin: 4,
+    shardsMax: 12,
+    /** Debug punch: damage, radius (m) and impulse (N*s). */
+    punchDamage: 200,
+    punchRadius: 4,
+    punchImpulse: 2.0e6,
+    /** Debug punch centre: metres in front of Basalt's feet (along its facing) and height above them. */
+    punchReach: 12,
+    punchHeight: 8,
+    /**
+     * Structural stress solver budget per physics step, in CG iterations x (bonds + pieces), shared
+     * by all awake buildings (~0.1 us each on a desktop CPU, so 20,000 is about 2 ms). The quality
+     * tier scales it (preset.solverWorkScale). Unfinished solves resume next step.
+     */
+    solverWorkPerStep: 20000,
+    /**
+     * Mean force while a member is crushed, as a fraction of its peak capacity (post-peak softening:
+     * buckled, hinged members carry little). Sets how much energy a crush absorbs from a falling mass.
+     */
+    crushWork: 0.15,
+  },
+
   input: {
     /** Stick / joystick dead zone (0..1). */
     deadZone: 0.15,

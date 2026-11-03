@@ -19,6 +19,8 @@ export interface QualityPreset {
   antialias: boolean;
   /** Plan budgets (used from Phase 2). */
   maxActiveChunks: number;
+  /** Multiplier on config.destruction.solverWorkPerStep (structural stress solver CPU per step). */
+  solverWorkScale: number;
   maxParticles: number;
 
   // ---- graphics features (all scale down for phones)
@@ -93,6 +95,14 @@ export interface Physics {
   stats(): PhysicsStats;
   /** Create a fixed (static) box collider. Centre and half-extents in metres, optional yaw (rad). */
   addStaticBox(center: THREE.Vector3Like, halfExtents: THREE.Vector3Like, yaw?: number): RAPIER.Collider;
+  /** Remove a collider made by addStaticBox together with its (single-collider) body. */
+  removeStaticCollider(collider: RAPIER.Collider): void;
+  /**
+   * Call `cb` for every contact-force event of the last step() (colliders flagged with
+   * CONTACT_FORCE_EVENTS), then clear them. Force components are world-space; magnitude is the
+   * sum of the contact force magnitudes (N).
+   */
+  drainContactForces(cb: (handle1: number, handle2: number, fx: number, fy: number, fz: number, magnitude: number) => void): void;
 }
 
 // ---------------------------------------------------------------- input
@@ -106,6 +116,8 @@ export interface InputSnapshot {
   lookY: number;
   /** Run modifier held. */
   run: boolean;
+  /** Punch button held (keyboard J, gamepad X, touch Punch). */
+  punch: boolean;
   /** Which device produced the most recent input. */
   device: 'keyboard' | 'gamepad' | 'touch';
 }
@@ -173,6 +185,11 @@ export interface FrameStats {
   quality: QualityLevel;
   inputDevice: InputSnapshot['device'];
   monsterSpeed: number;
+  /** Phase 2 destruction: dynamic bodies alive (budget: quality.maxActiveChunks). */
+  activeChunks: number;
+  liveBonds: number;
+  awakeBuildings: number;
+  rubbleBodies: number;
 }
 
 export interface DebugUI {

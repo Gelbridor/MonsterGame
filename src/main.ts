@@ -11,6 +11,9 @@ import { detectQuality, getQualityPreset } from './core/quality';
 import { createRenderer, applyShadowFlags, reloadWithWebGL } from './render/renderer';
 import { createPhysics } from './physics/world';
 import { buildTown } from './city/town-layout';
+import { buildingColliders } from './city/buildings';
+import { createDestructionRenderer } from './destruction/piece-render';
+import { createDestruction } from './destruction';
 import { createBasalt } from './monster/basalt';
 import { createFollowCamera } from './camera/follow-camera';
 import { createDebugUI } from './debug/panel';
@@ -50,6 +53,11 @@ async function start() {
     else if (kind === 'building') applyShadowFlags(o, 'city', quality);
   });
 
+  const destructionRenderer = createDestructionRenderer(ctx.scene, town, quality);
+  const destruction = createDestruction({
+    physics, renderer: destructionRenderer, specs: town.specs, quality, buildingColliders,
+  });
+
   const basalt = createBasalt(ctx.scene, physics, town.spawn, quality);
   applyShadowFlags(basalt.object, 'monster', quality);
 
@@ -85,6 +93,25 @@ async function start() {
     quality: quality.level,
     inputDevice: 'keyboard',
     monsterSpeed: 0,
+    activeChunks: 0,
+    liveBonds: 0,
+    awakeBuildings: 0,
+    rubbleBodies: 0,
+  };
+
+  // Debug punch: preallocated so the loop never allocates.
+  const punchCenter = new THREE.Vector3();
+  const punchDir = new THREE.Vector3();
+  let punchHeld = false;
+  const punchAt = (x: number, y: number, z: number, dx = 0, dz = -1) => {
+    punchCenter.set(x, y, z);
+    punchDir.set(dx, 0, dz);
+    destruction.applyDamage({
+      shape: { kind: 'sphere', center: punchCenter, radius: config.destruction.punchRadius },
+      damage: config.destruction.punchDamage,
+      impulse: config.destruction.punchImpulse,
+      direction: punchDir,
+    });
   };
 
   const visualPos = new THREE.Vector3();
@@ -92,11 +119,27 @@ async function start() {
   const loop = createLoop({
     fixedUpdate(dt) {
       basalt.fixedUpdate(dt, snapshot, followCam.yaw);
+      if (snapshot.punch && !punchHeld) {
+        const h = basalt.heading;
+        const fx = -Math.sin(h);
+        const fz = -Math.cos(h);
+        const reach = config.destruction.punchReach;
+        punchAt(
+          basalt.position.x + fx * reach,
+          basalt.position.y + config.destruction.punchHeight,
+          basalt.position.z + fz * reach,
+          fx,
+          fz,
+        );
+      }
+      punchHeld = snapshot.punch;
       physics.step();
+      destruction.fixedUpdate(dt);
       physicsMs += physics.stats().stepMs;
     },
     frame(frameDt, alpha, steps) {
       basalt.syncVisual(alpha);
+      destruction.syncVisual(alpha);
       basalt.object.getWorldPosition(visualPos);
 
       // Read input after the steps so look deltas apply this frame; movement
@@ -126,6 +169,11 @@ async function start() {
       stats.triangles = r.triangles;
       stats.inputDevice = snapshot.device;
       stats.monsterSpeed = speed;
+      const d = destruction.stats();
+      stats.activeChunks = d.activeChunks;
+      stats.liveBonds = d.liveBonds;
+      stats.awakeBuildings = d.awakeBuildings;
+      stats.rubbleBodies = d.rubbleBodies;
       debug.updateStats(stats);
       physicsMs = 0;
     },
@@ -141,7 +189,7 @@ async function start() {
   });
 
   // Handy from the browser console while tuning.
-  Object.assign(window as unknown as Record<string, unknown>, { mb: { config, ctx, physics, basalt, town, rain, splashes, cones } });
+  Object.assign(window as unknown as Record<string, unknown>, { mb: { config, ctx, physics, basalt, town, destruction, punchAt, rain, splashes, cones } });
   console.info(
     `[Monster Brawl] ${ctx.backend.toUpperCase()} · quality ${quality.level} · ${town.buildingCount} buildings`,
   );
