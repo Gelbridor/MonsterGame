@@ -197,17 +197,17 @@ export function createRain(
       const across = exp(dx.mul(dx).mul(-0.9));
 
       // vertical dashes scrolling down
-      const dashLen = vR.mul(uPx).mul(h1.mul(12).add(12));
+      const dashLen = vR.mul(uPx).mul(h1.mul(30).add(30));
       const speed = float(FALL * 1.6).mul(h2.mul(0.3).add(0.85));
       const s = vW.y.add(uTime.mul(speed)).div(dashLen).add(h1.mul(40));
       const k = floor(s);
       const fs = fract(s);
-      const present = step(0.42, cellRand(vec2(col.add(k.mul(131)), colSalt), 14));
+      const present = step(0.78, cellRand(vec2(col.add(k.mul(131)), colSalt), 14));
       const along = smoothstep(0, 0.06, fs).mul(pow(float(1).sub(fs), 1.6));
 
       const aFade = smoothstep(0, 14, vW.y).mul(float(1).sub(smoothstep(SHEET_H - 40, SHEET_H - 10, vW.y)));
       const fogAtt = exp(vR.mul(uFog).mul(vR).mul(uFog).negate());
-      const a = across.mul(along).mul(present).mul(aFade).mul(fogAtt).mul(uIntensity).mul(0.32);
+      const a = across.mul(along).mul(present).mul(aFade).mul(fogAtt).mul(uIntensity).mul(0.2);
       Discard(a.lessThan(0.004));
       const V = normalize(d);
       const lamp = weatherLamps.light(vW, V, { lamps: Math.min(lampCount, 6), r0: 9, forward: 3.0, reach: 90 });

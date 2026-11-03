@@ -47,11 +47,11 @@ export function rainRipples(worldXZ: THREE.Node | N, intensity: THREE.Node | N):
     const r = float(rMax).mul(size).mul(float(1).sub(pow(float(1).sub(age), 2.2)));
     const x = d.sub(r);
     const w = float(0.022).add(age.mul(0.02)); // envelope width grows as it spreads
-    const env = exp(x.mul(x).div(w * w).negate());
+    const env = exp(x.mul(x).div(w.mul(w)).negate());
     const kk = float(k).mul(float(1.15).sub(size.mul(0.4)));
     const amp = pow(float(1).sub(age), 1.8).mul(float(0.18)).mul(active);
     // h = amp * env * sin(kk x);  dh/dd
-    const dh = amp.mul(env.mul(kk).mul(cos(kk.mul(x))).sub(env.mul(x.mul(2).div(w * w)).mul(sin(kk.mul(x)))));
+    const dh = amp.mul(env.mul(kk).mul(cos(kk.mul(x))).sub(env.mul(x.mul(2).div(w.mul(w))).mul(sin(kk.mul(x)))));
     // ignore the cell edges (ring radius keeps rings inside cells, but be safe)
     const inside = float(1).sub(smoothstep(cell * 0.42, cell * 0.5, max(f.x.abs(), f.y.abs())));
     grad = grad.add(dv.div(d).mul(dh.mul(inside)).mul(0.012));

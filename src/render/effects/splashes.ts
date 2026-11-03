@@ -32,9 +32,9 @@ const AMBIENT = new THREE.Color(0.11, 0.145, 0.23);
 export function splashCountFor(quality: QualityPreset): number {
   switch (quality.level) {
     case 'ultra':
-      return 5000;
+      return 3500;
     case 'high':
-      return 2800;
+      return 2200;
     case 'medium':
       return 900;
     default:
@@ -151,7 +151,7 @@ export function createSplashes(scene: THREE.Scene, camera: THREE.PerspectiveCame
     const rad2 = rad.mul(0.58);
     const ring2D = rr.sub(rad2).div(w);
     const ring2 = exp(ring2D.mul(ring2D).negate()).mul(pow(float(1).sub(a), 2.2)).mul(0.5);
-    const flatA = ring.add(ring2).mul(0.55);
+    const flatA = ring.add(ring2).mul(0.9);
 
     // ---- droplets (upright card, 2.5 R wide x 3.5 R tall): short ballistic streaks
     const cp = vec2(q.x.sub(0.5).mul(2.5), q.y.mul(3.5));
@@ -170,7 +170,7 @@ export function createSplashes(scene: THREE.Scene, camera: THREE.PerspectiveCame
       const r = px.mul(0.75).add(0.012);
       drops = drops.add(exp(dd.div(r).mul(dd.div(r)).negate()).mul(hv.mul(0.6).add(0.4)));
     }
-    const dropA = drops.mul(pow(float(1).sub(a), 0.7)).mul(0.6);
+    const dropA = drops.mul(pow(float(1).sub(a), 0.7)).mul(0.4);
 
     const alpha = select(isCard, dropA, flatA).mul(vFade);
     return vec4(vLit, alpha);
