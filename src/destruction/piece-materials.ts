@@ -247,17 +247,23 @@ export function createPieceMaterials(quality: QualityPreset, mode: MaterialMode)
   // ---------------------------------------------------------- glass (lit / unlit panes)
   out.glass = mk();
   {
-    const lit = smoothstep(0.52, 0.56, seed.mul(1.01));
-    const warm = h11(seed.mul(91.0));
-    const lampColor = mix(c3(0xffb866), c3(0xcfe6ff), smoothstep(0.6, 0.9, warm));
-    const room = vnoise(vec2(u, v).mul(1.6).add(seed.mul(30.0)));
-    // pane: dark sky-reflecting glass, a soft glow when lit, thin frame at the border
-    const sky = mix(c3(0x0b1220), c3(0x1b2c42), smoothstep(0.0, 1.0, vnoise(vec2(u, v).mul(0.6).add(seed.mul(5.0)))));
-    const outer: N = sky.mul(0.9);
+    // Sash grid: ~0.9 x 1.2 m panes split by thin dark bars; each pane is lit or dark on its own.
+    const pw = 0.9, ph = 1.2;
+    const gu = u.div(pw), gv = v.div(ph);
+    const cell = vec2(floor(gu), floor(gv));
+    const lit = smoothstep(0.5, 0.56, h21(cell.add(seed.mul(61.0))));
+    const warm = h21(cell.add(vec2(7.0, seed.mul(13.0))));
+    const lampColor = mix(c3(0xffb866), c3(0xcfe6ff), smoothstep(0.7, 0.95, warm));
+    const bar = min(min(fract(gu), oneMinus(fract(gu))).mul(pw), min(fract(gv), oneMinus(fract(gv))).mul(ph));
+    const frame = oneMinus(smoothstep(0.018, 0.03, bar));
+    const room = vnoise(vec2(u, v).mul(2.2).add(seed.mul(30.0))).mul(0.55).add(0.45);
+    const curtain = smoothstep(0.0, 1.0, fract(gv)).mul(0.5).add(0.5);
+    const sky = mix(c3(0x0b1220), c3(0x1b2c42), vnoise(vec2(u, v).mul(0.6).add(seed.mul(5.0))));
+    const outer: N = mix(sky, c3(0x14161a), frame);
     const core: N = mix(c3(0x9ec3bd), c3(0xd9f0ec), rawNoise(22.0));
-    const glow = lampColor.mul(room.mul(0.6).add(0.55)).mul(lit).mul(2.2);
+    const glow = lampColor.mul(room).mul(curtain).mul(lit).mul(oneMinus(frame)).mul(1.5);
     finish(
-      out.glass, select(inner, core, outer), select(inner, 0.22, 0.06), float(0),
+      out.glass, select(inner, core, outer), select(inner, 0.22, mix(float(0.06), float(0.5), frame)), float(0),
       select(inner, vec3(0.0), glow),
     );
   }
