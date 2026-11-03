@@ -119,8 +119,12 @@ export const config = {
     punchDamage: 100,
     punchRadius: 4,
     punchImpulse: 2.0e6,
-    /** Structural stress solver: conjugate-gradient iterations per physics step, shared by all awake buildings. */
-    solverItersPerStep: 600,
+    /**
+     * Structural stress solver budget per physics step, in CG iterations x (bonds + pieces), shared
+     * by all awake buildings (~0.1 us each on a desktop CPU, so 20,000 is about 2 ms). The quality
+     * tier scales it (preset.solverWorkScale). Unfinished solves resume next step.
+     */
+    solverWorkPerStep: 20000,
     /**
      * Mean force while a member is crushed, as a fraction of its peak capacity (post-peak softening:
      * buckled, hinged members carry little). Sets how much energy a crush absorbs from a falling mass.

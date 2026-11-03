@@ -19,6 +19,8 @@ export interface QualityPreset {
   antialias: boolean;
   /** Plan budgets (used from Phase 2). */
   maxActiveChunks: number;
+  /** Multiplier on config.destruction.solverWorkPerStep (structural stress solver CPU per step). */
+  solverWorkScale: number;
   maxParticles: number;
 
   // ---- graphics features (all scale down for phones)
