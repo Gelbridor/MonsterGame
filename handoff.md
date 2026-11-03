@@ -7,8 +7,8 @@ Read `plan.md` first: it is the design, and every phase and gate comes from it.
 
 | Branch | State | What it holds |
 | --- | --- | --- |
-| `main` | Phase 1 build (`20c17f7`) | Phase 1 Foundations: blockout town, Basalt capsule, controls, debug UI. **The Phase 1 gate has not been signed off by the user yet.** |
-| `graphics-pass` | Reviewed, pushed (`3f3b63a`) | A full graphics upgrade on top of Phase 1. Every part was reviewed from screenshots and merged. **Not merged to `main` yet** because of the known faults below. |
+| `main` | Live on GitHub Pages (`646cd1e`) | Phase 1 Foundations **plus the graphics pass** (merged via PR #1), including the known faults below. **The Phase 1 gate has not been signed off by the user yet.** |
+| `graphics-pass` | Same code as `main` | The branch the graphics upgrade was built on; every part was reviewed from screenshots. Continue polish here or on a fresh branch from `main`. |
 | `wip/city-polish` | **Unreviewed** WIP (`9a2c0ed`) | An interrupted fix for the city's wet-ground faults (`src/city/materials.ts`). Type-checks; never screenshot-reviewed. |
 | `wip/basalt-polish` | **Unreviewed** WIP (`fdbc85c`) | An interrupted fix for Basalt's over-hot lava and hidden head (`basalt-model.ts`, `rock-material.ts`), plus a dev viewer (`src/monster/viewer.*`). Type-checks; never screenshot-reviewed. |
 
@@ -22,7 +22,7 @@ so the graphics pass jumped ahead of the plan's phase order. Destruction (Phase 
 2. **Final whole-scene check on `graphics-pass`.**
    - Cover ultra, high, medium and low, plus `--phone`.
    - Confirm that rain on ultra and high reads as subtle; this was only verified on medium.
-3. **Merge `graphics-pass` into `main`**, as a squash or `--no-ff` merge with a clear message.
+3. **Merge the polish into `main`** (`graphics-pass` itself is already merged via PR #1).
    - That triggers the GitHub Pages deploy, so the user can test on a phone.
 4. **Get the user's Phase 1 gate sign-off** (phone test), then start Phase 2 (destruction) from `plan.md`.
    - Destruction comes first per the plan; don't add more polish before it.
@@ -78,7 +78,7 @@ Vite + TypeScript, Three.js r187 `WebGPURenderer` with TSL node materials (autom
   - Judge the **default gameplay camera** first, since the player sees it 95 % of the time.
 - **Phone testing:**
   - Via GitHub Pages, every push to `main` deploys (`.github/workflows/pages.yml`).
-  - The first run **failed**, most likely because Pages isn't enabled. The user must set repo Settings → Pages → Source: **GitHub Actions**, then re-run the workflow.
+  - Pages is enabled and deploying successfully from `main`.
   - Over plain `http://` on the LAN, phones get WebGL 2, not WebGPU.
 
 ## Working method that was used
