@@ -5,17 +5,24 @@
 // WebGPU init throws.
 
 import * as THREE from 'three/webgpu';
+import { normalize, positionLocal, vec4 } from 'three/tsl';
+import { CSMShadowNode } from 'three/addons/csm/CSMShadowNode.js';
+import { ClusteredLighting } from 'three/addons/lighting/ClusteredLighting.js';
 import { config } from '../config';
 import type { QualityPreset, RenderBackend, RenderContext } from '../core/types';
+import { createSky, MOON_DIR } from './sky';
+import { createEnvironment } from './environment';
+import { createPost, type Post } from './post';
 
 /** Half-size (m) of the orthographic shadow frustum around the focus point. */
 const SHADOW_EXTENT = 90;
 /** Distance (m) from the focus point to the moon light. */
 const SHADOW_DISTANCE = 220;
-/** Direction from the focus point towards the moon. */
-const MOON_DIR = new THREE.Vector3(-0.45, 0.8, 0.4).normalize();
-
-const BACKGROUND_COLOR = 0x10141c;
+/** Far edge (m) of the cascaded moon shadows. */
+const CSM_FAR = 400;
+/** Light units per config.render.moonIntensity / ambientIntensity. */
+const MOON_GAIN = 0.7;
+const HEMI_GAIN = 0.05;
 
 function wantsForcedWebGL(): boolean {
   const params = new URLSearchParams(window.location.search);
@@ -39,7 +46,7 @@ async function initRenderer(
 
   // Attempt 1: as requested. Attempt 2 (only if attempt 1 wasn't already WebGL): force WebGL 2.
   for (let attempt = 0; attempt < 2; attempt++) {
-    const renderer = new THREE.WebGPURenderer({ antialias: quality.antialias, forceWebGL });
+    const renderer = new THREE.WebGPURenderer({ antialias: quality.antialias && !quality.post.enabled, forceWebGL });
     try {
       await renderer.init();
       const backend: RenderBackend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend
@@ -83,14 +90,24 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
   }
 
   // ---- renderer settings
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  // Tone mapping is applied once: by the post pipeline's output stage, or by the renderer when post is off.
+  // ACES keeps sodium orange punchy and holds contrast in the dark; `?tonemap=agx` is there for A/B checks.
+  const tmParam = new URLSearchParams(window.location.search).get('tonemap');
+  const toneMapping = tmParam === 'agx' ? THREE.AgXToneMapping : THREE.ACESFilmicToneMapping;
+  renderer.toneMapping = toneMapping;
   renderer.toneMappingExposure = config.render.exposure;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const shadowsOn = quality.shadowMapSize > 0;
   renderer.shadowMap.enabled = shadowsOn;
   // WebGPURenderer maps PCFSoftShadowMap to PCFShadowMap (with a warning), so ask for PCF directly.
+  // PCF here is a 5-tap rotated Vogel disk: `shadow.radius` (texels) sets the softness.
   renderer.shadowMap.type = THREE.PCFShadowMap;
+
+  // Many point lights (street lamps, lava) are cheaper with clustered shading. Works on both backends.
+  if (quality.maxDynamicLights >= 16) {
+    renderer.lighting = new ClusteredLighting(Math.max(64, quality.maxDynamicLights * 2));
+  }
 
   const canvas = renderer.domElement;
   canvas.style.display = 'block';
@@ -99,48 +116,73 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
 
   // ---- scene
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(BACKGROUND_COLOR);
-  const fog = new THREE.FogExp2(BACKGROUND_COLOR, config.render.fogDensity);
-  scene.fog = fog;
+  const sky = createSky(quality);
+  // Sky dome as a background node: far plane, no depth write, so AO / SSR treat it as empty space.
+  scene.backgroundNode = vec4(sky.skyColor(normalize(positionLocal)), 1);
+  // Distance + height fog coloured by the sky horizon glow.
+  scene.fogNode = sky.fogNode();
+
+  const env = createEnvironment(renderer, sky, 256);
+  scene.environment = env.texture;
+  scene.environmentIntensity = config.render.envIntensity;
 
   // ---- camera
   const camera = new THREE.PerspectiveCamera(config.camera.fov, 1, config.camera.near, config.camera.far);
 
   // ---- lighting
-  // Cool sky / dark warm ground so shapes stay readable in the blockout.
-  const hemi = new THREE.HemisphereLight(0x6d86b8, 0x2a2118, 1.1);
+  // Dark scene with pools of light: a weak cool sky / warm ground fill, the rest comes from the environment and the moon.
+  const hemi = new THREE.HemisphereLight(0x5f78a8, 0x3a2a20, config.render.ambientIntensity * HEMI_GAIN);
   scene.add(hemi);
 
   // The moon.
-  const sun = new THREE.DirectionalLight(0xbcd0ff, 2.2);
+  const sun = new THREE.DirectionalLight(0xb4c8ff, config.render.moonIntensity * MOON_GAIN);
   sun.position.copy(MOON_DIR).multiplyScalar(SHADOW_DISTANCE);
   scene.add(sun);
   scene.add(sun.target);
 
+  let csm: CSMShadowNode | null = null;
+  let csmTuned = false;
   if (shadowsOn) {
     sun.castShadow = true;
     sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
+    sun.shadow.radius = 4;
+    sun.shadow.intensity = 0.55; // overcast: shadows keep ~45% of the moon light
     const cam = sun.shadow.camera;
-    cam.left = -SHADOW_EXTENT;
-    cam.right = SHADOW_EXTENT;
-    cam.top = SHADOW_EXTENT;
-    cam.bottom = -SHADOW_EXTENT;
-    cam.near = 10;
-    cam.far = SHADOW_DISTANCE * 2;
-    cam.updateProjectionMatrix();
-    sun.shadow.bias = -0.0004;
-    sun.shadow.normalBias = 0.5;
+    if (quality.cascadedShadows) {
+      cam.near = 1;
+      cam.far = 900;
+      cam.updateProjectionMatrix();
+      sun.shadow.bias = -0.0003;
+      sun.shadow.normalBias = 0.12;
+      const cascades = quality.level === 'ultra' ? 4 : 3;
+      const splits = cascades === 4 ? [70, 140, 250, CSM_FAR] : [80, 190, CSM_FAR];
+      csm = new CSMShadowNode(sun, {
+        cascades,
+        maxFar: CSM_FAR,
+        mode: 'custom',
+        lightMargin: 160,
+        customSplitsCallback: (_n: number, _near: number, far: number, target: number[]) => {
+          for (const d of splits) target.push(Math.min(d, far) / far);
+        },
+      });
+      csm.fade = true;
+      sun.shadow.shadowNode = csm;
+    } else {
+      cam.left = -SHADOW_EXTENT;
+      cam.right = SHADOW_EXTENT;
+      cam.top = SHADOW_EXTENT;
+      cam.bottom = -SHADOW_EXTENT;
+      cam.near = 10;
+      cam.far = SHADOW_DISTANCE * 2;
+      cam.updateProjectionMatrix();
+      sun.shadow.bias = -0.0004;
+      sun.shadow.normalBias = 0.2;
+    }
   }
 
-  // Two cheap warm sodium-style fills (no shadows) so the dark isn't flat.
-  const fillA = new THREE.PointLight(0xff9a4a, 400, 120, 2);
-  fillA.position.set(40, 12, 30);
-  const fillB = new THREE.PointLight(0xff9a4a, 400, 120, 2);
-  fillB.position.set(-50, 12, -40);
-  scene.add(fillA, fillB);
-
   // ---- shadow focus (snapped to shadow texels to stop shimmering)
-  const texelSize = shadowsOn ? (2 * SHADOW_EXTENT) / quality.shadowMapSize : 0;
+  // With cascades the shadow node does its own texel snapping; only the single map needs this.
+  const texelSize = shadowsOn && !csm ? (2 * SHADOW_EXTENT) / quality.shadowMapSize : 0;
   // Light-space axes: z points from the focus towards the moon.
   const lightX = new THREE.Vector3(0, 1, 0).cross(MOON_DIR).normalize();
   const lightY = new THREE.Vector3().crossVectors(MOON_DIR, lightX);
@@ -161,6 +203,16 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
   }
   setShadowFocus(new THREE.Vector3(0, 0, 0));
 
+  // ---- post-processing
+  let post: Post | null = null;
+  if (quality.post.enabled) {
+    try {
+      post = createPost(renderer, scene, camera, quality, sky, toneMapping);
+    } catch (err) {
+      console.warn('[renderer] post-processing setup failed, rendering directly', err);
+    }
+  }
+
   // ---- sizing
   function resize(): void {
     const w = Math.max(1, container.clientWidth || window.innerWidth);
@@ -172,6 +224,7 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
     camera.updateProjectionMatrix();
   }
   resize();
+  renderer.info.autoReset = false;
 
   window.addEventListener('resize', resize);
   window.addEventListener('orientationchange', resize);
@@ -179,7 +232,7 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
 
   let disposed = false;
 
-  return {
+  const ctx: RenderContext = {
     renderer,
     backend,
     scene,
@@ -190,15 +243,38 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
       if (disposed) return;
       // Re-read tunables so the debug panel can change them live.
       renderer.toneMappingExposure = config.render.exposure;
-      fog.density = config.render.fogDensity;
+      scene.environmentIntensity = config.render.envIntensity * 0.5;
+      hemi.intensity = config.render.ambientIntensity * HEMI_GAIN;
+      sun.intensity = config.render.moonIntensity * MOON_GAIN;
+      sky.update();
+      let frustumChanged = false;
       if (camera.fov !== config.camera.fov || camera.near !== config.camera.near || camera.far !== config.camera.far) {
         camera.fov = config.camera.fov;
         camera.near = config.camera.near;
         camera.far = config.camera.far;
         camera.updateProjectionMatrix();
+        frustumChanged = true;
+      }
+      if (csm) {
+        if (frustumChanged) csm.updateFrustums();
+        // The cascade lights exist after the first build; give each its own bias (texels grow with distance).
+        if (!csmTuned && csm.lights.length > 0) {
+          csm.lights.forEach((l, i) => {
+            l.shadow!.normalBias = 0.1 + i * 0.09;
+            l.shadow!.bias = -0.00025 * (i + 1);
+            l.shadow!.radius = 4;
+            l.shadow!.intensity = 0.55;
+          });
+          csmTuned = true;
+        }
       }
       try {
-        renderer.render(scene, camera);
+        if (post) {
+          post.render();
+        } else {
+          renderer.info.reset();
+          renderer.render(scene, camera);
+        }
       } catch (err) {
         if (backend === 'webgpu') reloadWithWebGL(err);
         else throw err;
@@ -214,10 +290,13 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
       window.removeEventListener('resize', resize);
       window.removeEventListener('orientationchange', resize);
       window.visualViewport?.removeEventListener('resize', resize);
+      post?.dispose();
+      env.dispose();
       canvas.remove();
       safeDispose(renderer);
     },
   };
+  return ctx;
 }
 
 /**
