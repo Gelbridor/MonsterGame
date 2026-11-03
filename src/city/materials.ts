@@ -20,9 +20,9 @@
 
 import * as THREE from 'three/webgpu';
 import {
-  Fn, If, abs, attribute, bool, cameraPosition, cameraViewMatrix, clamp, color, cos, cross, dFdx, dFdy, dot, exp, float,
-  floor, fract, length, max, min, mix, mod, mx_fractal_noise_float, normalize, normalViewGeometry, normalWorldGeometry,
-  oneMinus, positionView, positionWorld, pow, round, saturate, select, sign, sin, smoothstep, sqrt, step, texture, time,
+  Fn, If, abs, attribute, bool, cameraPosition, cameraViewMatrix, clamp as _clamp, color, cos, cross, dFdx, dFdy, dot, exp, float,
+  floor, fract, length, max as _max, min as _min, mix as _mix, mod as _mod, mx_fractal_noise_float, normalize, normalViewGeometry, normalWorldGeometry,
+  oneMinus, positionView, positionWorld, pow as _pow, round, saturate, select as _select, sign, sin, smoothstep as _smoothstep, sqrt, step as _step, texture, time,
   transformDirection, uniform, uv, vec2, vec3, vec4,
 } from 'three/tsl';
 import { config } from '../config';
@@ -33,6 +33,18 @@ import { createSignAtlas, type SignAtlas } from './signage';
 // TSL nodes are loosely typed.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type N = any;
+
+// Function-form TSL helpers don't all promote raw JS numbers; wrap them.
+const nn = (v: N): N => (typeof v === 'number' ? float(v) : v);
+const max = (a: N, b: N): N => _max(nn(a), nn(b));
+const min = (a: N, b: N): N => _min(nn(a), nn(b));
+const mod = (a: N, b: N): N => _mod(nn(a), nn(b));
+const pow = (a: N, b: N): N => _pow(nn(a), nn(b));
+const step = (a: N, b: N): N => _step(nn(a), nn(b));
+const mix = (a: N, b: N, t: N): N => _mix(nn(a), nn(b), nn(t));
+const clamp = (a: N, lo: N, hi: N): N => _clamp(nn(a), nn(lo), nn(hi));
+const smoothstep = (a: N, b: N, x: N): N => _smoothstep(nn(a), nn(b), nn(x));
+const select = (c: N, a: N, b: N): N => _select(c, nn(a), nn(b));
 
 export interface RoadInfo {
   roadX: number[];
@@ -130,7 +142,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
   const B = attribute('aB', 'vec4');
   const C = attribute('aC', 'vec4');
   const uvm = uv();
-  const fp: N = max(positionWorld.dFdx().length(), positionWorld.dFdy().length()).max(0.0005);
+  const fp: N = max(positionWorld.dFdx().length(), positionWorld.dFdy().length()).max(float(0.0005));
 
   const newMat = (): THREE.MeshStandardNodeMaterial => {
     const m = new THREE.MeshStandardNodeMaterial();
@@ -191,15 +203,15 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     if (D >= 1) {
       const sn = vnoise(vec2(u.mul(3.1).add(seed.mul(77.0)), v.mul(0.16)));
       const streaks = smoothstep(0.42, 0.85, sn);
-      const topDark = smoothstep(0.0, 1.0, v.div(bldH.max(1.0))).mul(0.65).add(0.15);
+      const topDark = smoothstep(0.0, 1.0, v.div(bldH.max(float(1.0)))).mul(0.65).add(0.15);
       soil = A.w.mul(streaks.mul(0.7).add(0.25)).mul(topDark);
       // gutter / cornice run-off at the roofline
       const gutter = smoothstep(bldH.sub(2.2), bldH, v).mul(streaks.mul(0.6).add(0.35));
       soil = soil.add(gutter.mul(0.45));
       if (o.windowStreaks !== false) {
-        const dxw = abs(fract(u.sub(B.y).div(B.x.max(0.5)).add(0.5)).sub(0.5)).mul(B.x);
+        const dxw = abs(fract(u.sub(B.y).div(B.x.max(float(0.5))).add(0.5)).sub(0.5)).mul(B.x);
         const inWin = oneMinus(smoothstep(B.z.mul(0.5), B.z.mul(0.5).add(0.35), dxw));
-        const fh = C.x.max(1.0);
+        const fh = C.x.max(float(1.0));
         const fyy = v.sub(floor(v.div(fh)).mul(fh));
         const under = oneMinus(smoothstep(0.0, 1.2, B.w.sub(fyy))).mul(step(fyy, B.w.add(0.02)));
         const sn2 = vnoise(vec2(u.mul(11.0), v.mul(0.6)).add(seed.mul(5.0)));
@@ -218,7 +230,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       albedo = mix(albedo, c3(0x1d2230).mul(vnoise(vec2(u, v).mul(1.1)).mul(0.5).add(0.7)), pl.mul(0.9));
     }
 
-    const rough = mix(float(o.roughBase ?? 0.9), float(0.5), wet.mul(wetStreak.mul(0.45).add(0.3)).add(damp.mul(wet).mul(0.25)).clamp(0.0, 0.9))
+    const rough = mix(float(o.roughBase ?? 0.9), float(0.5), wet.mul(wetStreak.mul(0.45).add(0.3)).add(damp.mul(wet).mul(0.25)).clamp(float(0.0), float(0.9)))
       .add(mortarM.mul(0.05));
 
     let normalNode: N | null = null;
@@ -267,10 +279,10 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const u = uvm.x;
     const v = uvm.y;
     const seed = C.z;
-    const panelW = B.x.max(1.0);
+    const panelW = B.x.max(float(1.0));
     const pu = u.sub(B.y).div(panelW);
     const pi = floor(pu);
-    const fh = C.x.max(1.0);
+    const fh = C.x.max(float(1.0));
     const fi = floor(v.div(fh));
     const pcol = h21(vec2(pi.add(seed.mul(17.0)), fi));
     // distance to nearest seam (m)
@@ -278,8 +290,8 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const dV = min(fract(v.div(fh)), oneMinus(fract(v.div(fh)))).mul(fh);
     const seamD = min(dU, dV);
     const aa = fp.mul(0.8).add(0.002);
-    const seam = oneMinus(smoothstep(0.008, 0.008 + aa.max(0.012), seamD));
-    const fineSeam = mix(float(0.05), seam, fadeFor(0.5, fp).max(0.35));
+    const seam = oneMinus(smoothstep(0.008, aa.max(float(0.012)).add(0.008), seamD));
+    const fineSeam = mix(float(0.05), seam, fadeFor(0.5, fp).max(float(0.35)));
     let base: N = mix(c3(0x8a8a84), c3(0xa09e96), pcol).mul(A.xyz).mul(0.55);
     // board-marked fine horizontal lines
     const board = sin(v.mul(Math.PI / 0.12)).mul(0.5).add(0.5).mul(fadeFor(0.12, fp));
@@ -290,18 +302,18 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     // water staining: long vertical streaks, heavier under horizontal seams
     const stain = smoothstep(0.4, 0.85, vnoise(vec2(u.mul(5.2).add(seed.mul(30.0)), v.mul(0.07))));
     const belowSeam = oneMinus(smoothstep(0.0, 0.7, fract(v.div(fh)).mul(fh))).mul(0.5);
-    const topSoot = smoothstep(0.0, 1.0, v.div(C.y.max(1.0))).mul(0.5).add(0.2);
+    const topSoot = smoothstep(0.0, 1.0, v.div(C.y.max(float(1.0)))).mul(0.5).add(0.2);
     const soil = clamp(stain.mul(0.45).mul(topSoot).add(belowSeam.mul(stain)).add(A.w.mul(0.25)), 0.0, 0.8);
     base = mix(base, base.mul(c3(0x2b2a29)).mul(1.5), soil);
     base = mix(base, c3(0x1a1b1d), fineSeam.mul(0.8));
     const damp = oneMinus(smoothstep(0.0, 1.6, v));
     base = base.mul(mix(1.0, 0.7, wet.mul(0.6))).mul(mix(1.0, 0.6, damp.mul(wet)));
     concrete.colorNode = base;
-    concrete.roughnessNode = mix(float(0.92), float(0.55), wet.mul(stain.mul(0.4).add(0.35)).add(damp.mul(wet).mul(0.2)).clamp(0.0, 0.85));
+    concrete.roughnessNode = mix(float(0.92), float(0.55), wet.mul(stain.mul(0.4).add(0.35)).add(damp.mul(wet).mul(0.2)).clamp(float(0.0), float(0.85)));
     concrete.metalness = 0;
     if (D >= 2) {
       const relief = seam.mul(-0.005).add(board.mul(0.0006)).add(agg.mul(0.0006));
-      concrete.normalNode = bumpNormal(relief.mul(fadeFor(0.5, fp).max(0.2)), float(1.0));
+      concrete.normalNode = bumpNormal(relief.mul(fadeFor(0.5, fp).max(float(0.2))), float(1.0));
     }
   }
 
@@ -327,7 +339,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     sc = mix(sc, c3(0x47404f), smoothstep(0.9, 1.0, h1.mul(h2).mul(1.6)).mul(0.6));
     const avg = c3(0x383e4a);
     const shade = smoothstep(0.0, 0.85, fy).mul(0.5).add(0.55);
-    const jointX = oneMinus(smoothstep(0.0015, 0.006 + fp.mul(0.7), min(fx, oneMinus(fx)).mul(wRow)));
+    const jointX = oneMinus(smoothstep(0.0015, fp.mul(0.7).add(0.006), min(fx, oneMinus(fx)).mul(wRow)));
     let albedo: N = mix(avg, sc.mul(shade), fine);
     albedo = mix(albedo, c3(0x101216), jointX.mul(0.6).mul(fine));
     const patch = vnoise(vec2(u, v).mul(0.45).add(seed.mul(31.0)));
@@ -337,7 +349,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     albedo = albedo.mul(mix(1.0, 0.65, wet.mul(0.7)));
     slate.colorNode = albedo;
     const lowEdge = oneMinus(smoothstep(0.0, 0.06, fy)).mul(fine);
-    slate.roughnessNode = mix(float(0.82), float(0.3), wet.mul(h1.mul(0.5).add(0.5))).sub(lowEdge.mul(wet).mul(0.15)).clamp(0.15, 1.0);
+    slate.roughnessNode = mix(float(0.82), float(0.3), wet.mul(h1.mul(0.5).add(0.5))).sub(lowEdge.mul(wet).mul(0.15)).clamp(float(0.15), float(1.0));
     slate.metalness = 0.05;
     if (D >= 2) {
       const relief = fy.mul(0.004).add(jointX.mul(-0.003)).add(h1.mul(0.0016));
@@ -351,8 +363,8 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const u = uvm.x;
     const v = uvm.y;
     const seed = A.x;
-    const floorH = A.z.max(1.0);
-    const bayW = A.w.max(0.5);
+    const floorH = A.z.max(float(1.0));
+    const bayW = A.w.max(float(0.5));
     const spandrelH = B.x;
     const mw = B.y;
     const fl = floor(v.div(floorH));
@@ -361,12 +373,12 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const fxm = fract(bu).mul(bayW);
     const dMull = min(fxm, bayW.sub(fxm));
     const mull = oneMinus(smoothstep(mw.mul(0.5), mw.mul(0.5).add(fp.mul(0.9).add(0.004)), dMull));
-    const transom = oneMinus(smoothstep(0.035, 0.035 + fp.mul(0.9).add(0.004), abs(fy.sub(floorH).add(0.04)).min(abs(fy.sub(spandrelH)))));
+    const transom = oneMinus(smoothstep(0.035, fp.mul(0.9).add(0.004).add(0.035), abs(fy.sub(floorH).add(0.04)).min(abs(fy.sub(spandrelH)))));
     const inSpandrel = oneMinus(smoothstep(spandrelH.sub(0.02), spandrelH.add(0.02), fy));
     const frameM = clamp(mull.add(transom).add(inSpandrel), 0.0, 1.0);
     const fineF = fadeFor(0.8, fp);
     const frameAvg = mix(float(0.0), float(1.0), float(0.28));
-    const fm = mix(frameAvg.mul(0.5), frameM, fineF.max(0.25));
+    const fm = mix(frameAvg.mul(0.5), frameM, fineF.max(float(0.25)));
 
     // lit floors: whole bands in patches, with cool fluorescent light
     const fh = h21(vec2(fl, seed.mul(91.0)));
@@ -376,9 +388,9 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const lit = max(litFloor, lobby.mul(0.9));
     const ceilStrip = smoothstep(0.35, 0.55, sin(u.mul(Math.PI * 2 / 1.8)).mul(0.5).add(0.5));
     const interior = float(0.35).add(smoothstep(0.0, floorH, fy).mul(0.9)).add(ceilStrip.mul(smoothstep(floorH.mul(0.8), floorH, fy)).mul(1.8));
-    const cool = mix(c3(0xaaccff), c3(0xffe2b0), step(0.82, h21(vec2(fl.add(5.0), seed))));
+    const cool = mix(c3(0x7fa8e0), c3(0xffd8a0), step(0.82, h21(vec2(fl.add(5.0), seed))));
     const glassMask = oneMinus(fm);
-    const litEmit: N = cool.mul(interior).mul(lit).mul(glassMask).mul(1.35);
+    const litEmit: N = cool.mul(interior).mul(lit).mul(glassMask).mul(0.6);
 
     // glass: dark blue, metallic + smooth so env map / SSR reflect the street
     const tone = vnoise(vec2(u.mul(0.4), v.mul(0.25)).add(seed.mul(17.0)));
@@ -510,8 +522,8 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       const folds = sin(cu.mul(winW).mul(38.0).add(seed.mul(9.0))).mul(0.18).add(0.86);
       const closedC = oneMinus(step(0.2, ct));
       const sideW = h11(seed.mul(81.0)).mul(0.12).add(0.14);
-      const sidesC = step(0.2, ct).mul(oneMinus(step(0.5, ct))).mul(step(oneMinus(sideW), abs(cu.sub(0.5)).mul(2.0).sub(0.0)).max(0.0));
-      const sideEdge = smoothstep(0.5 - sideW.mul(0.5), 0.5, abs(cu.sub(0.5)));
+      const sidesC = step(0.2, ct).mul(oneMinus(step(0.5, ct))).mul(step(oneMinus(sideW), abs(cu.sub(0.5)).mul(2.0).sub(0.0)).max(float(0.0)));
+      const sideEdge = smoothstep(sideW.mul(-0.5).add(0.5), 0.5, abs(cu.sub(0.5)));
       const sidesCov = step(0.2, ct).mul(oneMinus(step(0.5, ct))).mul(sideEdge);
       void sidesC;
       const drop = h11(seed.mul(91.0)).mul(0.55).add(0.2);
@@ -524,7 +536,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
 
       const litRad = radiance.mul(lit);
       // unlit rooms: a faint hint of dark interior, bluish
-      const idleRad = mix(vec3(0.004, 0.006, 0.01), vec3(0.01, 0.014, 0.022), bv.clamp(0.0, 1.0).mul(isBack));
+      const idleRad = mix(vec3(0.004, 0.006, 0.01), vec3(0.01, 0.014, 0.022), bv.clamp(float(0.0), float(1.0)).mul(isBack));
       const sheen = mix(c3(0x0a1420), c3(0x1c2638), oneMinus(uvm.y)).mul(0.16);
       let interiorOut: N = mix(idleRad, litRad, lit).add(sheen.mul(oneMinus(lit)));
 
@@ -692,7 +704,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     rough = rough.add(agg.mul(0.1));
     rough = mix(rough, float(0.5), paintAmt.mul(0.9));
     rough = mix(rough, float(0.55), manhole.mul(0.8));
-    rough = mix(rough, float(0.04), puddle.mul(wet.mul(0.6).add(0.4)));
+    rough = mix(rough, float(0.1), puddle.mul(wet.mul(0.6).add(0.4)));
     rough = mix(rough, float(0.78), oneMinus(road));
     ground.roughnessNode = rough;
     ground.metalnessNode = manhole.mul(0.7);
@@ -713,7 +725,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const viewDir = normalize(cameraPosition.sub(positionWorld));
     const nd = saturate(viewDir.y);
     const fres = float(0.03).add(pow(oneMinus(nd), 5.0).mul(0.97));
-    const skyRefl = vec3(0.07, 0.1, 0.17).mul(fres).mul(puddle.mul(1.6).add(dampZone.mul(wet).mul(0.35)));
+    const skyRefl = vec3(0.05, 0.07, 0.12).mul(fres).mul(puddle.mul(0.8).add(dampZone.mul(wet).mul(0.2)));
     const poolLit = pool.mul(albedo).mul(2.6).mul(oneMinus(puddle.mul(0.5)));
     const poolMirror = pool.mul(pool).mul(2.8).mul(puddle.mul(wet).add(dampZone.mul(wet).mul(0.18)));
     ground.emissiveNode = skyRefl.add(poolLit).add(poolMirror).mul(road.mul(0.85).add(0.15));
@@ -742,7 +754,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       const fy = fract(z.div(rowH));
       const edgeD = min(min(fx, oneMinus(fx)).mul(colW), min(fy, oneMinus(fy)).mul(rowH));
       const fine = fadeFor(0.6, fp);
-      const joint = oneMinus(smoothstep(0.004, 0.011 + fp.mul(0.8), edgeD));
+      const joint = oneMinus(smoothstep(0.004, fp.mul(0.8).add(0.011), edgeD));
       const jointM = mix(float(0.06), joint, fine);
       const hc = h21(vec2(col, row));
       const hc2 = h21(vec2(col.add(4.0), row.add(2.0)));
@@ -754,9 +766,9 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       topAlbedo = mix(topAlbedo, c3(0x1a1a1c), jointM.mul(0.85));
       topAlbedo = topAlbedo.mul(large.mul(0.45).add(0.8)).mul(vnoise(p2.mul(30.0)).mul(fadeFor(0.03, fp)).mul(0.25).add(0.9));
       topAlbedo = topAlbedo.mul(mix(1.0, 0.65, wet.mul(0.8)));
-      const thr = mix(float(0.86), float(0.66), wet);
+      const thr = mix(float(0.9), float(0.74), wet);
       const pn = fbm3(p2.mul(0.5).add(vec2(2.2, 8.1))).add(hc.mul(0.12));
-      puddle = smoothstep(thr, thr.add(0.05), pn).mul(0.8);
+      puddle = smoothstep(thr, thr.add(0.05), pn).mul(0.7);
       topRough = mix(float(0.85), float(0.32), wet.mul(hc2.mul(0.4).add(0.5))).add(joint.mul(0.1));
       topRelief = joint.mul(-0.006).add(hc.mul(0.002));
       topRelief = topRelief.mul(fine);
@@ -771,13 +783,13 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       const fy = fract(z.div(rowH));
       const edgeD = min(min(fx, oneMinus(fx)).mul(L), min(fy, oneMinus(fy)).mul(rowH));
       const fine = fadeFor(rowH, fp);
-      const joint = oneMinus(smoothstep(0.008, 0.02 + fp.mul(0.8), edgeD));
+      const joint = oneMinus(smoothstep(0.008, fp.mul(0.8).add(0.02), edgeD));
       const hc = h21(vec2(col, row));
       const hc2 = h21(vec2(col.add(9.0), row.add(5.0)));
       let sc: N = mix(c3(0x5a5a5e), c3(0x7e7a74), hc);
       sc = mix(sc, c3(0x5a5058), step(0.8, hc2).mul(0.7));
       sc = mix(sc, c3(0x474f58), step(0.9, hc).mul(0.6));
-      topAlbedo = mix(c3(0x58585a).mul(0.6), sc.mul(0.6), fine);
+      topAlbedo = mix(c3(0x58585a).mul(1.0), sc.mul(1.0), fine);
       topAlbedo = mix(topAlbedo, c3(0x151517), mix(float(0.18), joint, fine).mul(0.9));
       topAlbedo = topAlbedo.mul(large.mul(0.5).add(0.75));
       topAlbedo = topAlbedo.mul(mix(1.0, 0.62, wet.mul(0.85)));
@@ -796,7 +808,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     void kerbDirt;
     const aSide = mix(kerb, topAlbedo, isTop);
     m.colorNode = mix(aSide, aSide.mul(0.35), puddle.mul(isTop));
-    m.roughnessNode = mix(mix(float(0.55), topRough, isTop), float(0.04), puddle.mul(isTop).mul(wet.mul(0.5).add(0.5)));
+    m.roughnessNode = mix(mix(float(0.55), topRough, isTop), float(0.16), puddle.mul(isTop).mul(wet.mul(0.5).add(0.5)));
     m.metalnessNode = float(0.0);
     if (D >= 2) {
       const bumpN = bumpNormal(topRelief.mul(oneMinus(puddle)).mul(isTop), float(1.0));
@@ -843,7 +855,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const dirtBase = oneMinus(smoothstep(0.0, 1.2, y)).mul(0.35);
     paint.colorNode = A.xyz.mul(grime).mul(oneMinus(dirtBase)).mul(mix(1.0, 0.8, wet.mul(0.5)));
     paint.metalnessNode = A.w;
-    paint.roughnessNode = mix(B.w, B.w.mul(0.55), wet.mul(0.6)).max(0.08);
+    paint.roughnessNode = mix(B.w, B.w.mul(0.55), wet.mul(0.6)).max(float(0.08));
     paint.emissiveNode = B.xyz;
   }
 
@@ -856,8 +868,8 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const plateU = fract(u.div(2.4));
     const plateV = fract(v.div(1.2));
     const edge = min(min(plateU, oneMinus(plateU)).mul(2.4), min(plateV, oneMinus(plateV)).mul(1.2));
-    const seam = oneMinus(smoothstep(0.012, 0.03 + fp.mul(0.9), edge));
-    const rivets = oneMinus(smoothstep(0.012, 0.022 + fp.mul(0.8), length(vec2(fract(u.div(0.3)).sub(0.5), fract(v.div(0.3)).sub(0.5)).mul(0.3)))).mul(oneMinus(step(0.18, edge)).mul(step(0.05, edge))).mul(fadeFor(0.3, fp));
+    const seam = oneMinus(smoothstep(0.012, fp.mul(0.9).add(0.03), edge));
+    const rivets = oneMinus(smoothstep(0.012, fp.mul(0.8).add(0.022), length(vec2(fract(u.div(0.3)).sub(0.5), fract(v.div(0.3)).sub(0.5)).mul(0.3)))).mul(oneMinus(step(0.18, edge)).mul(step(0.05, edge))).mul(fadeFor(0.3, fp));
     const base = mix(c3(0x2c3a33), c3(0x3e4a42), vnoise(vec2(u, v).mul(0.6).add(seed.mul(9.0))));
     const rustN = fbm3(vec2(u, v).mul(0.9).add(seed.mul(20.0)));
     const rustStreak = smoothstep(0.35, 0.8, vnoise(vec2(u.mul(2.2), v.mul(0.12)).add(seed.mul(5.0))));

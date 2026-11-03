@@ -336,6 +336,14 @@ export function buildDressing(o: DressingOptions): Dressing {
     }
   }));
 
+  {
+    const sb = layout.blocks[2][2];
+    const qx0 = sb.x0 + 2, qx1 = sb.x1 - 2, qz0 = sb.z0 + 2, qz1 = sb.z1 - 2;
+    const mx = (sb.x0 + sb.x1) / 2, mz = (sb.z0 + sb.z1) / 2;
+    for (const [x, z] of [[qx0, qz0], [qx1, qz0], [qx0, qz1], [qx1, qz1], [mx - 22, qz0], [mx + 22, qz0], [mx - 22, qz1], [mx + 22, qz1], [qx0, mz - 22], [qx0, mz + 22], [qx1, mz - 22], [qx1, mz + 22]]) {
+      lampSpots.push({ x, z, yaw: 0, kind: 'sodium' });
+    }
+  }
   const victorian: Inst[] = [];
   const led: Inst[] = [];
   const lamps: LampInfo[] = [];
