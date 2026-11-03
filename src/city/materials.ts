@@ -146,9 +146,9 @@ const PUDDLE_ALBEDO = 0.55;
  */
 /** Wet stone and flagstone (not puddles): lamps skimming the surface at grazing angles otherwise lay a white sheet over the square. */
 const WET_STONE_SPECULAR = 0.15;
-const PUDDLE_SPECULAR = 0.1;
+const PUDDLE_SPECULAR = 0.03;
 /** Tarmac puddles sit at grazing angles under lamps, where the sky glow is strongest: keep them dimmer. */
-const PUDDLE_SPECULAR_ROAD = 0.12;
+const PUDDLE_SPECULAR_ROAD = 0.0;
 /** Warm lamp sheen on wet ground: gain and hard cap (linear, pre-tonemap). Night ground sits near 0.01 linear, so even 0.1 here reads as pale grey: keep it faint. */
 const LAMP_SHEEN = 0.08;
 const LAMP_SHEEN_MAX = 0.03;

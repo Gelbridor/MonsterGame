@@ -86,6 +86,9 @@ export const config = {
     aoIntensity: 1.0,
     aoRadius: 4.0,
     ssrStrength: 0.8,
+    /** SSR soft knee (HDR luminance of the reflection): below low it is dropped, above high it passes. Keeps wet ground dark (no pale sky/haze mirror) and leaves lamps, windows and signs. */
+    ssrKneeLow: 0.2,
+    ssrKneeHigh: 1.2,
     filmGrain: 0.06,
     vignette: 0.35,
     chromaticAberration: 0.0015,

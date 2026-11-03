@@ -63,6 +63,8 @@ export function createPost(
     bloomThreshold: uniform(config.render.bloomThreshold),
     aoIntensity: uniform(config.render.aoIntensity),
     ssrStrength: uniform(config.render.ssrStrength),
+    ssrKneeLow: uniform(config.render.ssrKneeLow),
+    ssrKneeHigh: uniform(config.render.ssrKneeHigh),
     grain: uniform(config.render.filmGrain),
     vignette: uniform(config.render.vignette),
     ca: uniform(config.render.chromaticAberration),
@@ -143,7 +145,10 @@ export function createPost(
     // Fade the reflection out towards the screen edges where rays run out of information.
     const e = min(min(screenUV.x, screenUV.x.oneMinus()), min(screenUV.y, screenUV.y.oneMinus()));
     const edgeFade = smoothstep(0.0, 0.12, e);
-    comp = comp.add(ssrTex.rgb.mul(edgeFade));
+    // Only bright things (lamps, windows, signs) reflect: a dim sky / haze mirror would turn wet ground pale.
+    const ssrRgb: N = ssrTex.rgb;
+    const ssrKnee = smoothstep(u.ssrKneeLow, u.ssrKneeHigh, dot(ssrRgb, vec3(0.2126, 0.7152, 0.0722)));
+    comp = comp.add(ssrRgb.mul(ssrKnee).mul(edgeFade));
   }
 
   // ---- AA / resolve of the HDR composite
@@ -242,6 +247,8 @@ export function createPost(
       u.aoIntensity.value = config.render.aoIntensity;
       if (aoRadiusUniform) aoRadiusUniform.value = config.render.aoRadius;
       u.ssrStrength.value = config.render.ssrStrength;
+      u.ssrKneeLow.value = config.render.ssrKneeLow;
+      u.ssrKneeHigh.value = config.render.ssrKneeHigh;
       u.grain.value = config.render.filmGrain;
       u.vignette.value = config.render.vignette;
       u.ca.value = config.render.chromaticAberration;
