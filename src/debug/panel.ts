@@ -71,6 +71,8 @@ const META: Record<string, Meta> = {
   'render.aoIntensity': { min: 0, max: 3, step: 0.01 },
   'render.aoRadius': { min: 0.25, max: 16, step: 0.05 },
   'render.ssrStrength': { min: 0, max: 1, step: 0.01 },
+  'render.ssrKneeLow': { min: 0, max: 1, step: 0.01 },
+  'render.ssrKneeHigh': { min: 0, max: 2, step: 0.01 },
   'render.filmGrain': { min: 0, max: 0.3, step: 0.005 },
   'render.vignette': { min: 0, max: 1, step: 0.01 },
   'render.chromaticAberration': { min: 0, max: 0.01, step: 0.0001 },
