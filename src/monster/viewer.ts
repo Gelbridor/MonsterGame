@@ -83,6 +83,24 @@ async function main() {
   }
 
   const target = new THREE.Vector3();
+  /** The real default gameplay camera (config.camera) behind and above Basalt. */
+  function gameCam(): void {
+    const c = config.camera;
+    camera.fov = c.fov;
+    camera.updateProjectionMatrix();
+    const p = basalt.object.position;
+    const h = basalt.heading;
+    target.set(p.x, p.y + c.lookAtHeight, p.z);
+    const dir = new THREE.Vector3(0, Math.sin(c.pitch), Math.cos(c.pitch));
+    dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), h);
+    camera.position.copy(target).addScaledVector(dir, c.distance);
+    camera.lookAt(target);
+    basalt.object.updateMatrixWorld(true);
+    sun.target.position.copy(p);
+    sun.position.copy(p).addScaledVector(moonDir, 220);
+    sun.target.updateMatrixWorld();
+    renderer.render(scene, camera);
+  }
   function view(name: string, dist = 60, lookH = 14, fov = 45): void {
     camera.fov = fov;
     camera.updateProjectionMatrix();
@@ -124,7 +142,7 @@ async function main() {
     renderer.render(scene, camera);
   }
 
-  Object.assign(window, { mb: { config, basalt, physics, sim, view, fixed, time: () => simTime, renderer } });
+  Object.assign(window, { mb: { config, basalt, physics, sim, view, gameCam, fixed, time: () => simTime, renderer } });
   sim(0.2);
   view('three');
 }

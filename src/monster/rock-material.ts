@@ -144,14 +144,14 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   // Dense fissures around the chest core; calm rock elsewhere unless a chunk asks for more.
   const coreDist = p.sub(vec3(0, 18.8, -5.0)).length();
   const coreBoost = float(1).sub(smoothstep(0.0, 4.5, coreDist)).mul(0.9);
-  const zone = smoothstep(0.12, 0.75, zoneNoise.add(crackDensity.sub(1).mul(0.5)).add(coreBoost)); // 0..1: where the big cracks open
-  const hot = saturate(zone.mul(crackDensity.mul(detail >= 2 ? 0.8 : 0.45)).add(heat.mul(0.3)));
+  const zone = smoothstep(detail >= 2 ? 0.0 : -0.08, 0.55, zoneNoise.add(crackDensity.sub(1).mul(0.5)).add(coreBoost)); // 0..1: where the big cracks open
+  const hot = saturate(zone.mul(crackDensity.mul(0.8)).add(heat.mul(0.3)));
   // Crack half-width in F2-F1 cell units: thin hairlines most places, fat in hot zones.
-  const wA = mix(0.005, 0.05, widthNoise.mul(0.5).add(0.5).mul(hot)).add(heat.mul(0.02));
+  const wA = mix(detail >= 2 ? 0.007 : 0.012, 0.05, widthNoise.mul(0.5).add(0.5).mul(hot)).add(heat.mul(0.02));
   // 0 = no crack .. 1 = crack core
   const crackA = float(1)
     .sub(smoothstep(wA.mul(0.1), wA, edgeA))
-    .mul(smoothstep(0.05, 0.3, zone.mul(crackDensity)).mul(detail >= 2 ? 1 : 0.7));
+    .mul(smoothstep(0.05, 0.3, zone.mul(crackDensity)).mul(1));
 
   let crackB: N = float(0);
   let edgeB: N = float(9);
@@ -177,9 +177,12 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   const crust = smoothstep(0.04, 0.34, edgeM);
   const moltenHeat = saturate(molten.mul(float(0.72).add(flow.mul(0.5))).sub(crust.mul(0.55).mul(saturate(float(1.4).sub(molten)))));
 
-  // Only the chest core is white-hot; cracks elsewhere stay orange-red (heat capped).
-  const hotCap = float(0.4).add(float(1).sub(smoothstep(0.0, 7.0, coreDist)).mul(0.6)).add(heat.mul(0.1));
-  const h0 = max(min(crack.mul(float(0.62).add(flow.mul(0.5))).mul(throb), hotCap), moltenHeat);
+  // Only the chest core, eyes/mouth and joint collars get white-hot. Cracks elsewhere
+  // run orange-red and dimmer; they only climb towards yellow-white near the core.
+  const nearCore = float(1).sub(smoothstep(2.0, 8.0, coreDist));
+  const crackWave = float(0.62).add(flow.mul(0.5)).mul(throb);
+  const limbWave = float(0.5).add(flow.mul(0.26)).mul(throb);
+  const h0 = max(crack.mul(mix(limbWave, crackWave, nearCore)), moltenHeat);
   const h = saturate(h0.add(heat.mul(0.15).mul(crack)));
 
   // Heat ramp: deep red edge -> orange -> yellow -> white-yellow core.
@@ -190,7 +193,7 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   let ramp: N = mix(c0, c1, smoothstep(0.0, 0.35, h));
   ramp = mix(ramp, c2, smoothstep(0.35, 0.7, h));
   ramp = mix(ramp, c3, smoothstep(0.72, 1.0, h));
-  const intensity = pow(h, 1.5).mul(5.5).add(h.mul(0.2));
+  const intensity = pow(h, 1.5).mul(detail >= 2 ? 5.5 : 7.5).add(h.mul(0.2));
   const lavaEmissive = ramp.mul(intensity).mul(pulse);
   const bleedEmissive = c0.mul(0.6).mul(bleed).mul(float(1).sub(h)).mul(pulse).mul(float(0.7).add(flow.mul(0.6)));
 
@@ -198,7 +201,7 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   const patch = fbm2(p.mul(0.33).add(vec3(8.0, 1.0, 3.0))).mul(0.5).add(0.5); // 0..1
   const grain = mx_noise_float(p.mul(2.7)).mul(0.5).add(0.5);
   // Blue-black basalt with rare warm brown / pale grey patches.
-  let albedo: N = mix(vec3(0.075, 0.066, 0.06), vec3(0.13, 0.115, 0.105), smoothstep(0.35, 0.9, patch));
+  let albedo: N = mix(vec3(0.06, 0.053, 0.048), vec3(0.105, 0.092, 0.084), smoothstep(0.35, 0.9, patch));
   albedo = mix(albedo, vec3(0.09, 0.066, 0.05), smoothstep(0.62, 0.95, mx_noise_float(p.mul(0.21).add(21.0)).mul(0.5).add(0.5)).mul(0.5));
   albedo = albedo.mul(tint).mul(float(0.82).add(grain.mul(0.36)));
 
