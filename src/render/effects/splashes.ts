@@ -18,25 +18,27 @@ const {
 } = T;
 
 /** Side (m) of the camera-following square the splashes live in. */
-const AREA = 84;
+const AREA = 64;
 /** Look-ahead of the area centre along the camera heading (m). */
-const LEAD = 28;
+const LEAD = 16;
 /** Seconds per splash cycle. */
-const CYCLE = 0.55;
+const CYCLE = 0.8;
+/** Fraction of a cycle a splash is alive (0.8 s * 0.27 = ~0.2 s). */
+const LIFE = 0.27;
 /** Crown radius in metres at the end of its life (before the distance boost). */
 const CROWN_R = 0.2;
 const DROPLETS = 5;
 
-const AMBIENT = new THREE.Color(0.11, 0.145, 0.23);
+const AMBIENT = new THREE.Color(0.004, 0.006, 0.010);
 
 export function splashCountFor(quality: QualityPreset): number {
   switch (quality.level) {
     case 'ultra':
-      return 3500;
-    case 'high':
       return 2200;
+    case 'high':
+      return 1400;
     case 'medium':
-      return 900;
+      return 400;
     default:
       return 0;
   }
@@ -84,7 +86,9 @@ export function createSplashes(scene: THREE.Scene, camera: THREE.PerspectiveCame
   const i = instanceIndex.toFloat();
   const cyc = uTime.div(CYCLE).add(cellRand(vec2(i, 0), 1));
   const n = floor(cyc);
-  const age = fract(cyc).toVar('splAge');
+  const raw = fract(cyc);
+  const age = raw.div(LIFE).toVar('splAge');
+  const alive = float(1).sub(smoothstep(LIFE, LIFE + 0.001, raw));
   const rA = cellRand(vec2(i, n), 2);
   const rB = cellRand(vec2(i, n), 3);
   const rC = cellRand(vec2(i, n), 4);
@@ -116,7 +120,7 @@ export function createSplashes(scene: THREE.Scene, camera: THREE.PerspectiveCame
 
   // ---- opacity
   const edge = float(1).sub(smoothstep(0.7, 1.0, max(abs(rx), abs(rz)).div(AREA / 2)));
-  const nearFade = smoothstep(2, 9, dist);
+  const nearFade = smoothstep(2, 7, dist).mul(float(1).sub(smoothstep(15, 28, dist))).mul(alive);
   const fogAtt = exp(dist.mul(uFog).mul(dist.mul(uFog)).negate());
   const vFade = varying(edge.mul(nearFade).mul(fogAtt).mul(uIntensity).mul(rD.mul(0.5).add(0.5)), 'splFade');
   const vPart = varying(part, 'splPart');
@@ -126,7 +130,7 @@ export function createSplashes(scene: THREE.Scene, camera: THREE.PerspectiveCame
   const vSeed = varying(vec2(rC, rA), 'splSeed');
 
   const lamp = weatherLamps.light(C.add(vec3(0, 0.3, 0)), V, { lamps: lampCount, r0: 6, forward: 0.6, reach: 55 });
-  const vLit = varying(uAmbient.add(lamp.mul(2.5)), 'splLit');
+  const vLit = varying(uAmbient.add(lamp.mul(5.0)), 'splLit');
 
   const q = uv();
   // distance (in R units) between a card point and the segment a-b

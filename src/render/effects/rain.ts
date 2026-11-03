@@ -129,7 +129,8 @@ export function createRain(
     const yFade = smoothstep(len.mul(0.5), len.mul(0.5).add(0.8), py).mul(float(1).sub(smoothstep(BOX_Y - 12, BOX_Y, py)));
     const thin = clamp(w0.div(wd), 0.35, 1.0);
     const fogAtt = exp(dist.mul(uFog).mul(dist.mul(uFog)).negate());
-    const alpha = nearFade.mul(edge).mul(yFade).mul(thin).mul(fogAtt).mul(uIntensity).mul(0.42);
+    const skyCut = float(1).sub(smoothstep(0.0, 0.35, V.y).mul(0.3));
+    const alpha = skyCut.mul(nearFade).mul(edge).mul(yFade).mul(thin).mul(fogAtt).mul(uIntensity).mul(0.42);
 
     // ---- per-drop light (vertex stage, shared by the 4 corners)
     const lamp = weatherLamps.light(P, V, { lamps: lampCount, r0: 7, forward: 3.0 }).mul(uLampBoost);
