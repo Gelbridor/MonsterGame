@@ -183,6 +183,14 @@ export interface FrameStats {
   triangles: number;
   backend: RenderBackend;
   quality: QualityLevel;
+  /** GPU identity string (adapter info or unmasked renderer), if known. */
+  gpu?: string;
+  /** Why this quality tier was chosen. */
+  qualityReason?: string;
+  /** Current render-resolution scale (0.5..1). */
+  renderScale?: number;
+  /** Why this backend was chosen (empty = automatic). */
+  backendReason?: string;
   inputDevice: InputSnapshot['device'];
   monsterSpeed: number;
   /** Phase 2 destruction: dynamic bodies alive (budget: quality.maxActiveChunks). */

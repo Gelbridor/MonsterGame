@@ -59,6 +59,19 @@ export interface SleepOptions {
 const BAKE_MAX_PIECES = 6;
 /** Shards a crushed (pulverised) piece breaks into. */
 const CRUSHED_SHARDS = 3;
+/**
+ * Shard colliders are this fraction of the shard's size (visuals stay full size). Shards are cut to
+ * tile their piece exactly, so full-size colliders would start in face contact with every sibling
+ * and neighbour; Rapier then builds all those contacts in one step (about 20 ms per broken piece).
+ */
+const SHARD_COLLIDER_SCALE = 0.9;
+/** Most shard bodies created per physics step; further breaks wait a step or two (no frame spike). */
+const SHARDS_PER_STEP = 24;
+
+interface SpawnReq {
+  bld: Building; i: number; crushed: boolean; step: number;
+  pos: Float64Array; quat: Float64Array; vel: Float64Array; ang: Float64Array; push: Float64Array;
+}
 
 export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
   const R = sim.R;
@@ -180,7 +193,33 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
   const lerpPose = new Float64Array(7);
   void lerpPose;
 
+  // Breaks are queued and turned into shard bodies a few per step (see SHARDS_PER_STEP).
+  const spawnQueue: SpawnReq[] = [];
+  const spawnFree: SpawnReq[] = [];
   sim.spawnShards = (bld: Building, i: number, pos: Float64Array, quat: Float64Array, vel: Float64Array, ang: Float64Array, push: Float64Array, crushed: boolean): void => {
+    const r = spawnFree.pop() ?? {
+      bld, i, crushed, step: 0,
+      pos: new Float64Array(3), quat: new Float64Array(4), vel: new Float64Array(3), ang: new Float64Array(3), push: new Float64Array(3),
+    };
+    r.bld = bld; r.i = i; r.crushed = crushed; r.step = sim.step;
+    r.pos.set(pos); r.quat.set(quat); r.vel.set(vel); r.ang.set(ang); r.push.set(push);
+    spawnQueue.push(r);
+  };
+  const flushSpawns = (dt: number): void => {
+    let made = 0, k = 0;
+    for (; k < spawnQueue.length && made < SHARDS_PER_STEP; k++) {
+      const r = spawnQueue[k];
+      // the piece kept moving while it waited
+      const late = (sim.step - r.step) * dt;
+      for (let a = 0; a < 3; a++) r.pos[a] += r.vel[a] * late;
+      made += spawnNow(r.bld, r.i, r.pos, r.quat, r.vel, r.ang, r.push, r.crushed);
+      spawnFree.push(r);
+    }
+    if (k > 0) spawnQueue.splice(0, k);
+  };
+  (self as SleepSystem & { pendingSpawns: () => number }).pendingSpawns = () => spawnQueue.length;
+
+  const spawnNow = (bld: Building, i: number, pos: Float64Array, quat: Float64Array, vel: Float64Array, ang: Float64Array, push: Float64Array, crushed: boolean): number => {
     const piece = bld.graph.pieces[i];
     const mat = MATERIALS[piece.material];
     // pulverised members break into a few big lumps (the rest is dust, an effect, not bodies)
@@ -192,7 +231,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
       if (di === undefined) {
         enforceCapTo(self.chunkCount() - 1);
         di = debrisFree.pop();
-        if (di === undefined) return;
+        if (di === undefined) return k;
       }
       const sh = fr.shards[k];
       const d = debris[di];
@@ -212,10 +251,11 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
       body.setLinvel({ x: vx, y: vy, z: vz }, true);
       body.setAngvel({ x: ang[0] + (rnd() - 0.5) * 6, y: ang[1] + (rnd() - 0.5) * 6, z: ang[2] + (rnd() - 0.5) * 6 }, true);
       const mass = Math.max(1, Math.min(piece.mass * (sh.volume / volTotal), piece.mass));
-      let desc = sh.hull.length >= 12 ? R.ColliderDesc.convexHull(sh.hull) : null;
+      const hull = sh.hull.length >= 12 ? sh.hull.map((v) => v * SHARD_COLLIDER_SCALE) : null;
+      let desc = hull ? R.ColliderDesc.convexHull(hull) : null;
       let hx = 0, hy = 0, hz = 0;
       if (!desc) {
-        const e = Math.cbrt(Math.max(sh.volume, 1e-4)) / 2;
+        const e = (Math.cbrt(Math.max(sh.volume, 1e-4)) / 2) * SHARD_COLLIDER_SCALE;
         hx = hy = hz = e;
         desc = R.ColliderDesc.cuboid(e, e, e);
       }
@@ -229,7 +269,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
       d.born = sim.time;
       d.life = config.destruction.debrisLifetime * (0.6 + rnd() * 0.9);
       d.rest = 0;
-      d.hull = desc === null || hx > 0 ? null : sh.hull;
+      d.hull = desc === null || hx > 0 ? null : hull;
       d.hx = hx; d.hy = hy; d.hz = hz;
       d.crushed = crushed;
       d.cur[0] = px; d.cur[1] = py; d.cur[2] = pz;
@@ -237,6 +277,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
       d.prev.set(d.cur);
       usedDebris++;
     }
+    return n;
   };
 
   // ---- rubble
@@ -310,6 +351,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
 
   // ---- per step
   function update(dt: number): void {
+    flushSpawns(dt);
     const lifetime = config.destruction.debrisLifetime;
     for (let i = 0; i < debris.length; i++) {
       const d = debris[i];

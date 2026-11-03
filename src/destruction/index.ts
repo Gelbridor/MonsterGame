@@ -97,6 +97,10 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
 
   const tmp = new Float64Array(3);
   const wakeQueue: number[] = [];
+  /** Buildings near a hit but not touched by it: woken one per step, so a punch never wakes several in one frame. */
+  const lazyWake: number[] = [];
+  /** Measured solver cost (ms per unit of work), smoothed: turns the per-step time budget into work. */
+  let msPerWork = 3e-4;
   const impactCodes: number[] = [];
 
   const wakeBuilding = (specId: number): Building | null => {
@@ -238,11 +242,17 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     physics.drainContactForces(onForce);
     for (let k = 0; k < wakeQueue.length; k++) wakeBuilding(wakeQueue[k]);
     wakeQueue.length = 0;
+    while (lazyWake.length > 0) {
+      const id = lazyWake.shift()!;
+      if (!sim.buildings.has(id)) { wakeBuilding(id); break; }
+    }
 
     const groups = sim.groups;
     const n = groups.length;
     /** Solver work (CG iterations x bonds) left this step; unfinished solves resume next step. */
-    const budget0 = config.destruction.solverWorkPerStep * quality.solverWorkScale;
+    const budget0 = (config.destruction.solverMsPerStep * quality.solverWorkScale) / msPerWork;
+    const work0 = sim.solver.workRun;
+    const tSolve0 = performance.now();
     let budget = budget0;
     /** Landings are one-step transients that cannot wait for a later step: their own allowance. */
     let impactBudget = budget0 * IMPACT_BUDGET;
@@ -312,6 +322,14 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
           }
         }
         if (G.live) for (const i of G.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
+      }
+    }
+
+    {
+      const w = sim.solver.workRun - work0;
+      if (w > 2000) {
+        const m = (performance.now() - tSolve0) / w;
+        msPerWork += (Math.min(5e-3, Math.max(2e-5, m)) - msPerWork) * 0.2;
       }
     }
 
@@ -387,7 +405,9 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     // wake buildings in range
     for (const spec of specs) {
       if (sim.buildings.has(spec.id) || spec.type === 'gasholder') continue;
-      if (spec2probeDist(spec) <= radius + config.destruction.wakeRadius) wakeBuilding(spec.id);
+      const dist = spec2probeDist(spec);
+      if (dist <= radius + 6) wakeBuilding(spec.id);
+      else if (dist <= radius + config.destruction.wakeRadius && !lazyWake.includes(spec.id)) lazyWake.push(spec.id);
     }
     const healthScale = Math.max(0.01, config.destruction.healthScale);
     const kills: Array<{ b: Building; i: number; dx: number; dy: number; dz: number; f: number }> = [];
