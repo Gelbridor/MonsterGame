@@ -119,6 +119,9 @@ export const config = {
     punchDamage: 100,
     punchRadius: 4,
     punchImpulse: 2.0e6,
+    /** Debug punch centre: metres in front of Basalt's feet (along its facing) and height above them. */
+    punchReach: 12,
+    punchHeight: 8,
     /** Structural stress solver: conjugate-gradient iterations per physics step, shared by all awake buildings. */
     solverItersPerStep: 600,
     /**

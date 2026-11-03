@@ -46,6 +46,20 @@ const META: Record<string, Meta> = {
   'monster.turnSpeed': { min: 0, max: 10, step: 0.05 },
   'monster.stepHeight': { min: 0, max: 10, step: 0.1 },
 
+  'destruction.healthScale': { min: 0.1, max: 10, step: 0.05 },
+  'destruction.bondStrengthScale': { min: 0.05, max: 10, step: 0.05 },
+  'destruction.wakeRadius': { min: 0, max: 60, step: 0.5 },
+  'destruction.debrisLifetime': { min: 0.5, max: 30, step: 0.5 },
+  'destruction.shardsMin': { min: 1, max: 20, step: 1 },
+  'destruction.shardsMax': { min: 1, max: 40, step: 1 },
+  'destruction.punchDamage': { min: 1, max: 2000, step: 1 },
+  'destruction.punchRadius': { min: 0.5, max: 20, step: 0.1 },
+  'destruction.punchImpulse': { min: 0, max: 2e7, step: 1e4 },
+  'destruction.punchReach': { min: 0, max: 40, step: 0.5 },
+  'destruction.punchHeight': { min: 0, max: 30, step: 0.5 },
+  'destruction.solverItersPerStep': { min: 0, max: 3000, step: 10 },
+  'destruction.crushWork': { min: 0, max: 1, step: 0.01 },
+
   'camera.fov': { min: 20, max: 110, step: 1 },
   'camera.distance': { min: 10, max: 200, step: 1 },
   'camera.pitch': { min: -0.5, max: 1.5, step: 0.01 },
@@ -343,6 +357,8 @@ export function createDebugUI(cfg: Config, opts?: { onRestartRequired?: (key: st
       `Physics ${avgPhys.toFixed(2)} ms x${s.physicsSteps}\n` +
       `Bodies  ${s.activeBodies}/${s.bodies}\n` +
       `Joints  ${s.joints}\n` +
+      `Chunks  ${s.activeChunks} <span class="d">bonds</span> ${s.liveBonds}\n` +
+      `Bldgs   ${s.awakeBuildings} awake <span class="d">rubble</span> ${s.rubbleBodies}\n` +
       `Collid  ${s.colliders}\n` +
       `Draws   ${s.drawCalls}\n` +
       `Tris    ${fmtCount(s.triangles)}\n` +
