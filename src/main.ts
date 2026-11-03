@@ -46,7 +46,7 @@ async function start() {
     else if (kind === 'building') applyShadowFlags(o, 'city', quality);
   });
 
-  const basalt = createBasalt(ctx.scene, physics, town.spawn);
+  const basalt = createBasalt(ctx.scene, physics, town.spawn, quality);
   applyShadowFlags(basalt.object, 'monster', quality);
 
   const followCam = createFollowCamera(ctx.camera);
