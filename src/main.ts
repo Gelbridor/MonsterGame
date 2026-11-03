@@ -7,8 +7,8 @@ import * as THREE from 'three/webgpu';
 import { config } from './config';
 import { createLoop } from './core/loop';
 import { createInput } from './core/input';
-import { detectQuality, getQualityPreset } from './core/quality';
-import { createRenderer, applyShadowFlags, reloadWithWebGL } from './render/renderer';
+import { pickQuality, getQualityPreset, createAdaptiveQuality, showStoredToast } from './core/quality';
+import { createRenderer, setBackendPreference, applyShadowFlags, reloadWithWebGL } from './render/renderer';
 import { createPhysics } from './physics/world';
 import { buildTown } from './city/town-layout';
 import { buildingColliders } from './city/buildings';
@@ -28,7 +28,11 @@ const loadingEl = document.getElementById('loading')!;
 async function start() {
   const container = document.getElementById('app')!;
 
-  const quality = getQualityPreset(detectQuality());
+  const pick = await pickQuality();
+  const quality = getQualityPreset(pick.level);
+  config.render.renderScale = pick.renderScale;
+  setBackendPreference(pick.preferWebGL);
+  const adaptive = createAdaptiveQuality(pick.level, pick.forced);
   config.render.maxPixelRatio = quality.pixelRatio;
 
   // Renderer and physics initialise in parallel (WebGPU adapter + Rapier wasm).
@@ -91,6 +95,10 @@ async function start() {
     triangles: 0,
     backend: ctx.backend,
     quality: quality.level,
+    gpu: pick.gpu,
+    qualityReason: pick.reason,
+    renderScale: config.render.renderScale,
+    backendReason: pick.backendReason,
     inputDevice: 'keyboard',
     monsterSpeed: 0,
     activeChunks: 0,
@@ -175,11 +183,14 @@ async function start() {
       stats.awakeBuildings = d.awakeBuildings;
       stats.rubbleBodies = d.rubbleBodies;
       debug.updateStats(stats);
+      adaptive.frame(frameDt);
+      stats.renderScale = config.render.renderScale;
       physicsMs = 0;
     },
   });
 
   loadingEl.remove();
+  showStoredToast();
   loop.start();
 
   // Pause the simulation while the tab is hidden; resume cleanly.

@@ -17,6 +17,7 @@ import GUI from 'lil-gui';
 import type { Controller } from 'lil-gui';
 import type { Config } from '../config';
 import type { DebugUI, FrameStats } from '../core/types';
+import { resetAutoQuality } from '../core/quality';
 
 // ------------------------------------------------------------------ metadata
 
@@ -95,6 +96,22 @@ const META: Record<string, Meta> = {
   'weather.windX': { min: -15, max: 15, step: 0.1 },
   'weather.windZ': { min: -15, max: 15, step: 0.1 },
   'weather.wetness': { min: 0, max: 1, step: 0.01 },
+
+  'quality.startupIgnoreS': { min: 0, max: 20, step: 0.5 },
+  'quality.windowS': { min: 1, max: 15, step: 0.5 },
+  'quality.percentile': { min: 0.5, max: 0.99, step: 0.01 },
+  'render.renderScale': { min: 0.5, max: 1, step: 0.05 },
+  'quality.scaleIntervalS': { min: 0.5, max: 10, step: 0.5 },
+  'quality.scaleDown': { min: 0.02, max: 0.3, step: 0.01 },
+  'quality.scaleUp': { min: 0.02, max: 0.3, step: 0.01 },
+  'quality.scaleMin': { min: 0.3, max: 1, step: 0.05 },
+  'quality.raiseFactor': { min: 1.02, max: 1.6, step: 0.01 },
+  'quality.startScaleWeak': { min: 0.5, max: 1, step: 0.05 },
+  'quality.minFpsLow': { min: 10, max: 60, step: 1 },
+  'quality.cooldownS': { min: 5, max: 120, step: 1 },
+  'quality.minFpsHigh': { min: 10, max: 120, step: 1 },
+  'quality.minFpsMedium': { min: 10, max: 120, step: 1 },
+  'quality.toastS': { min: 1, max: 10, step: 0.5 },
 
   'input.deadZone': { min: 0, max: 0.6, step: 0.01 },
   'input.touchStickRadius': { min: 30, max: 140, step: 1 },
@@ -186,6 +203,28 @@ function deepCopy<T>(v: T): T {
   return JSON.parse(JSON.stringify(v)) as T;
 }
 
+function esc(t: string): string {
+  return t.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
+}
+
+/** Trim vendor noise and ANGLE wrapping so the GPU name fits the overlay. */
+function shortGpu(g: string): string {
+  let name = g.split(' / ')[0];
+  const angle = /^ANGLE \((.*)\)$/.exec(name);
+  if (angle) {
+    const fields = angle[1].split(', ');
+    name = fields.length > 1 ? fields[1] : fields[0];
+    const vk = /^Vulkan [\d.]+ \((.*)\)$/.exec(name);
+    if (vk) name = vk[1];
+  }
+  name = name.replace(/\s*\(0x[0-9a-f]+\)/gi, '').replace(/\((R|TM)\)/gi, '').replace(/\s+/g, ' ').trim();
+  return name.length > 34 ? name.slice(0, 33) + '…' : name;
+}
+
+function showNote(text: string): void {
+  console.info('[debug] ' + text);
+}
+
 function fmtCount(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
@@ -234,6 +273,9 @@ export function createDebugUI(cfg: Config, opts?: { onRestartRequired?: (key: st
 
   gui.add({ close: () => ui.toggle() }, 'close').name('Close');
   gui.add({ reset: () => resetToDefaults() }, 'reset').name('Reset to defaults');
+  gui
+    .add({ reset: () => { resetAutoQuality(); showNote('Auto quality cleared, reload to re-detect'); } }, 'reset')
+    .name('Reset auto quality');
   gui.add({ copy: () => void copyText(JSON.stringify(cfg, null, 2)) }, 'copy').name('Copy config JSON');
 
   function build(parent: GUI, obj: Rec, path: string[]): void {
@@ -362,7 +404,11 @@ export function createDebugUI(cfg: Config, opts?: { onRestartRequired?: (key: st
       `Collid  ${s.colliders}\n` +
       `Draws   ${s.drawCalls}\n` +
       `Tris    ${fmtCount(s.triangles)}\n` +
-      `${s.backend.toUpperCase()} <span class="d">|</span> ${s.quality} <span class="d">|</span> ${s.inputDevice}\n` +
+      `${s.backend.toUpperCase()} <span class="d">|</span> ${s.quality}${s.renderScale !== undefined && s.renderScale < 0.995 ? ` @${s.renderScale.toFixed(2)}x` : ''} <span class="d">|</span> ${s.inputDevice}\n` +
+      (s.gpu ? `GPU     ${esc(shortGpu(s.gpu))}\n` : '') +
+      (s.backendReason ? `<span class="d">api</span>     ${esc(s.backendReason)}
+` : '') +
+      (s.qualityReason ? `<span class="d">why</span>     ${esc(s.qualityReason)}\n` : '') +
       `Speed   ${s.monsterSpeed.toFixed(1)} m/s`;
   }
 
