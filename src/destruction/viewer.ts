@@ -13,6 +13,7 @@
 import * as THREE from 'three/webgpu';
 import { detectQuality, getQualityPreset } from '../core/quality';
 import { createRenderer } from '../render/renderer';
+import { config } from '../config';
 import { createPhysics } from '../physics/world';
 import { buildTown } from '../city/town-layout';
 import { createDestructionRenderer } from './piece-render';
@@ -247,8 +248,38 @@ async function main(): Promise<void> {
     return made;
   }
 
+  /** Wake a REAL town building the way the sim does (generateBuilding + hideBuilding + addPiece at the group pose), no physics. */
+  const wokenSpecs: number[] = [];
+  let wokenInfo: { g: BuildingGraph; spec: unknown; handles: RenderHandle[]; q: THREE.Quaternion } | null = null;
+  async function wakeSpec(id: number): Promise<number> {
+    const spec = town?.specs.find((x) => x.id === id);
+    if (!spec) return -1;
+    // building-gen lives with the simulation (not on every branch): load it by variable path so tsc does not need it
+    const genPath = './building-gen';
+    const { generateBuilding } = (await import(/* @vite-ignore */ genPath)) as { generateBuilding: (s: unknown, l: string) => BuildingGraph | null };
+    const g = generateBuilding(spec, quality.level);
+    if (!g) return -1;
+    R.hideBuilding(id);
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), spec.yaw);
+    const v = new THREE.Vector3();
+    const handles2: RenderHandle[] = [];
+    for (const p of g.pieces) {
+      const h = R.addPiece(g, p);
+      handles2.push(h);
+      v.set(p.center[0], p.center[1], p.center[2]).applyQuaternion(q);
+      v.x += spec.x;
+      v.z += spec.z;
+      R.setTransform(h, v, q);
+    }
+    wokenSpecs.push(id);
+    wokenInfo = { g, spec, handles: handles2, q };
+    R.update();
+    return g.pieces.length;
+  }
+
   function cam(cx: number, cy: number, cz: number, tx: number, ty: number, tz: number, fov = 45): void {
     ctx.camera.fov = fov;
+    config.camera.fov = fov; // keep ctx.render() from seeing a frustum change (CSM would update before its first build)
     ctx.camera.updateProjectionMatrix();
     ctx.camera.position.set(cx, cy, cz);
     ctx.camera.lookAt(tx, ty, tz);
@@ -282,7 +313,7 @@ async function main(): Promise<void> {
 
   Object.assign(window, {
     mb: {
-      ctx, quality, R, town, graph, bx, bz, wake, collapse, shatterWhere, run, bake, cam, shot, spawnShards,
+      ctx, quality, R, town, graph, bx, bz, wake, collapse, shatterWhere, run, bake, cam, shot, spawnShards, wakeSpec, woken: () => wokenInfo,
       hide: (id: number) => R.hideBuilding(id),
       stats: () => ({ ...R.stats(), ...ctx.info(), bodies: bodies.length, resting: bodies.filter((b) => b.rest).length }),
       fractureBench: (n: number) => {
