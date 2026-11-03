@@ -7,6 +7,7 @@ import { getQualityPreset } from '../src/core/quality';
 import { config } from '../src/config';
 import { createDestruction, type DestructionSystem } from '../src/destruction';
 import { createNullRenderer } from '../src/destruction/debug-render';
+import { fractureBox } from '../src/destruction/fracture';
 import { pieceWorld, type Group } from '../src/destruction/joints';
 import type { QualityLevel } from '../src/core/types';
 import type { BuildingSpec } from '../src/city/town-layout';
@@ -370,6 +371,15 @@ async function t6(): Promise<void> {
       console.log(`  30 steps, all contact-force events off: phys ${fmt(median(t2.physArr), 2)} ms median`);
     }
   }
+  if (process.env.LONG) {
+    for (let sec = 3; sec <= 20; sec++) {
+      const t = newTimes();
+      stepN(env, 60, t);
+      const st = env.d.stats();
+      const ps = env.physics.stats();
+      console.log(`t=${sec}s chunks ${st.activeChunks} rubble ${st.rubbleBodies} bonds ${st.liveBonds} colliders ${ps.colliders} active ${ps.activeBodies} | phys avg ${fmt(t.phys / t.n, 2)} max ${fmt(t.maxPhys, 1)} sim avg ${fmt(t.sim / t.n, 2)} | crushed ${env.d.sim.crushedTotal} impact ${env.d.sim.impactKillsTotal}`);
+    }
+  }
   console.log(`after 2 s: chunks ${env.d.stats().activeChunks}, rubble ${env.d.stats().rubbleBodies}, bonds ${env.d.stats().liveBonds}`);
 }
 
@@ -407,6 +417,18 @@ async function t8(): Promise<void> {
   }
 }
 
+async function t9(): Promise<void> {
+  const env = await setup('low');
+  const b = env.d.wakeBuilding(19)!;
+  for (const i of [3, 16, 17, 4, 6, 18, 30, 25]) {
+    const p = b.graph.pieces[i];
+    for (const n of [7, 12]) {
+      const r = fractureBox(p.halfExtents[0], p.halfExtents[1], p.halfExtents[2], p.material, p.kind, p.seed, n);
+      console.log(`piece ${i} ${p.kind}/${p.material} ${p.halfExtents.map((v) => fmt(v, 2)).join('x')} count ${n} -> ${r.shards.length} shards`);
+    }
+  }
+}
+
 const which = process.argv[2] ?? 'all';
 (async () => {
   if (which === 't0') await t0();
@@ -414,6 +436,7 @@ const which = process.argv[2] ?? 'all';
   if (which === 't6') await t6();
   if (which === 't7') await t7();
   if (which === 't8') await t8();
+  if (which === 't9') await t9();
   if (which === 't1' || which === 'all') await t1();
   if (which === 't2' || which === 'all') await t2();
   if (which === 't3' || which === 'all') await t3();

@@ -158,7 +158,9 @@ function latticeCounts(count: number, ex: number, ey: number, ez: number, bx: nu
   let nx = Math.max(1, Math.round(ex / bx));
   let ny = Math.max(1, Math.round(ey / by));
   let nz = Math.max(1, Math.round(ez / bz));
-  for (let guard = 0; guard < 40 && nx * ny * nz > count; guard++) {
+  // (a long wall starts with hundreds of brick cells, so the shrink loop may need many passes; each
+  // pass removes one cell row, and it stops at 1 x 1 x 1 at worst)
+  for (let guard = 0; guard < 4096 && nx * ny * nz > count; guard++) {
     // shrink the axis with the most cells
     if (nx >= ny && nx >= nz && nx > 1) nx--;
     else if (ny >= nz && ny > 1) ny--;
