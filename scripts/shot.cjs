@@ -40,6 +40,7 @@ const flag = (name) => args.includes(name);
     context = await browser.newContext({ viewport: { width: w, height: h } });
   }
   const page = await context.newPage();
+  page.setDefaultTimeout(240000);
   const logs = [];
   page.on('console', (m) => {
     if (m.type() === 'error' || m.type() === 'warning' || /renderer|Monster Brawl/.test(m.text())) logs.push(`[${m.type()}] ${m.text()}`);
@@ -61,7 +62,7 @@ const flag = (name) => args.includes(name);
     }
   }
   await page.waitForTimeout(Number(opt('--wait', '9000')));
-  await page.screenshot({ path: out });
+  await page.screenshot({ path: out, timeout: 240000 });
   const stats = await page.evaluate(() => document.querySelector('.mb-stats')?.textContent ?? '');
   console.log(stats);
   console.log(logs.slice(0, 40).join('\n'));

@@ -251,6 +251,8 @@ export interface TownExtras {
   layout: TownLayout;
   /** World positions of every lamp head (emissive), for later light-cone effects. */
   lampPositions: THREE.Vector3[];
+  /** Light colour of each lamp in `lampPositions` (sodium orange or LED white). */
+  lampColors: THREE.Color[];
   /** The real point lights (nearest `quality.maxDynamicLights` lamps). */
   lights: THREE.PointLight[];
   /** Live material library (wetness / rain uniforms read config.weather every render). */
@@ -430,6 +432,6 @@ export function buildTown(scene: THREE.Scene, physics: Physics, quality?: Qualit
 
   return {
     group, spawn: spawnV, buildingCount: layout.specs.length, specs: layout.specs, layout,
-    lampPositions: dress.lampPositions, lights: dress.lights, materials: mats, buildingRanges: ranges, mergedParts,
+    lampPositions: dress.lampPositions, lampColors: dress.lamps.map((l) => new THREE.Color(l.color)), lights: dress.lights, materials: mats, buildingRanges: ranges, mergedParts,
   };
 }
