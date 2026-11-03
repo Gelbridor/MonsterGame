@@ -57,7 +57,7 @@ const META: Record<string, Meta> = {
   'destruction.punchImpulse': { min: 0, max: 2e7, step: 1e4 },
   'destruction.punchReach': { min: 0, max: 40, step: 0.5 },
   'destruction.punchHeight': { min: 0, max: 30, step: 0.5 },
-  'destruction.solverWorkPerStep': { min: 0, max: 200000, step: 1000 },
+  'destruction.solverMsPerStep': { min: 0, max: 8, step: 0.1 },
   'destruction.crushWork': { min: 0, max: 1, step: 0.01 },
 
   'camera.fov': { min: 20, max: 110, step: 1 },

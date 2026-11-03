@@ -320,6 +320,9 @@ async function t6(): Promise<void> {
   // replay a punch at a world point: PUNCH=x,y,z LEVEL=low
   const env = await setup((process.env.LEVEL as QualityLevel) || 'low');
   const [x, y, z] = (process.env.PUNCH || '-5,8,-59.5').split(',').map(Number);
+  // warm the JIT on a far building first so the timing below is steady-state
+  env.d.wakeBuilding(env.layout.specs[env.layout.specs.length - 1].id);
+  const tw0 = performance.now();
   env.d.applyDamage({ shape: { kind: 'sphere', center: { x, y, z }, radius: config.destruction.punchRadius }, damage: config.destruction.punchDamage, impulse: config.destruction.punchImpulse, direction: { x: 0, y: 0, z: -1 } });
   for (const b of env.d.sim.buildings.values()) {
     const g = b.graph;
@@ -328,8 +331,80 @@ async function t6(): Promise<void> {
     const s = b.spec;
     console.log(`woke ${s.type} ${s.id} at (${fmt(s.x)}, ${fmt(s.z)}) ${fmt(s.width)}x${fmt(s.depth)}x${fmt(s.height)} yaw ${fmt(s.yaw, 2)}: ${g.pieces.length}p/${g.bonds.length}b, destroyed ${dead.length}: ${dead.join(' ')}`);
   }
-  stepN(env, 120);
+  console.log(`applyDamage (wake + damage + shards): ${fmt(performance.now() - tw0, 1)} ms`);
+  const tm = newTimes();
+  const W = env.physics.world as unknown as Record<string, (...a: unknown[]) => number>;
+  if (process.env.PROF) {
+    (env.physics.world as unknown as { profilerEnabled: boolean }).profilerEnabled = true;
+    for (let k = 0; k < 4; k++) {
+      stepN(env, 1, tm);
+      const f = (n: string): string => `${n.replace('timing', '')} ${fmt(W[n].call(env.physics.world), 1)}`;
+      console.log(`  step ${k}: ` + ['timingStep', 'timingUserChanges', 'timingBroadPhase', 'timingNarrowPhase', 'timingIslandConstruction', 'timingSolver', 'timingVelocityAssembly', 'timingVelocityResolution', 'timingCcd'].map(f).join(' | '));
+    }
+  }
+  stepN(env, 120, tm);
+  console.log(`next 120 steps: physics avg ${fmt(tm.phys / tm.n, 2)} max ${fmt(tm.maxPhys, 1)} ms, destruction avg ${fmt(tm.sim / tm.n, 2)} max ${fmt(tm.maxSim, 1)} ms; first 10 steps: ` + tm.physArr.slice(0, 10).map((v, i) => fmt(v + tm.simArr[i], 1)).join(' '));
+  {
+    const w = env.physics.world;
+    const R = env.physics.RAPIER;
+    let pairs = 0, manifolds = 0, pts = 0, shards = 0;
+    w.forEachCollider((c) => {
+      const code = env.d.sim.owners.get(c.handle);
+      if (code !== undefined && code >= 1_000_000 && code < 2_000_000) shards++;
+    });
+    w.narrowPhase && w.forEachCollider((c) => {
+      w.contactPairsWith(c, (o) => {
+        pairs++;
+        w.contactPair(c, o, (m) => { manifolds++; pts += m.numContacts(); });
+      });
+    });
+    const st = env.physics.stats();
+    console.log(`world: bodies ${st.bodies} active ${st.activeBodies} colliders ${st.colliders}; shard colliders ${shards}; contact pairs ${pairs / 2} manifolds ${manifolds / 2} points ${pts / 2}`);
+    const t = newTimes();
+    stepN(env, 30, t);
+    console.log(`  30 steps baseline: phys ${fmt(median(t.physArr), 2)} ms median`);
+    if (process.env.EXP) {
+      w.forEachCollider((c) => { c.setActiveEvents(R.ActiveEvents.NONE); });
+      const t2 = newTimes();
+      stepN(env, 30, t2);
+      console.log(`  30 steps, all contact-force events off: phys ${fmt(median(t2.physArr), 2)} ms median`);
+    }
+  }
   console.log(`after 2 s: chunks ${env.d.stats().activeChunks}, rubble ${env.d.stats().rubbleBodies}, bonds ${env.d.stats().liveBonds}`);
+}
+
+async function t7(): Promise<void> {
+  const env = await setup((process.env.LEVEL as QualityLevel) || 'medium');
+  stepN(env, 30);
+  const time = (label: string, f: () => void): void => { const t0 = performance.now(); f(); console.log(`  ${label}: ${fmt(performance.now() - t0, 1)} ms`); };
+  const one = (label: string): void => time(label, () => stepN(env, 1));
+  one('step, idle');
+  env.d.wakeBuilding(env.layout.specs[env.layout.specs.length - 1].id); one('step after waking a far building (JIT warm-up)');
+  one('step');
+  const spec = env.layout.specs.find((x) => x.id === 19)!;
+  time('wake terrace 19', () => env.d.wakeBuilding(spec.id));
+  one('first step after wake'); one('second step');
+  const b = env.d.sim.buildings.get(spec.id)!;
+  let k = -1;
+  for (let i = 0; i < b.graph.pieces.length; i++) if (b.graph.pieces[i].kind === 'wall' && b.graph.pieces[i].floor === 0) { k = i; break; }
+  time('kill one wall piece (fracture + shard bodies)', () => env.d.killPiece(spec.id, k));
+  one('first step after shards'); one('second step'); one('third step');
+  for (let r = 0; r < 3; r++) one('step');
+}
+
+async function t8(): Promise<void> {
+  // three punches on three terraces: is the first-step spike a one-off (warm-up) or per punch?
+  const env = await setup((process.env.LEVEL as QualityLevel) || 'medium');
+  stepN(env, 30);
+  const terr = env.layout.specs.filter((x) => x.type === 'terrace').slice(0, 3);
+  for (const spec of terr) {
+    const p = localToWorld(spec, 0, 4, spec.depth / 2 + 0.5);
+    const t0 = performance.now();
+    env.d.applyDamage({ shape: { kind: 'sphere', center: p, radius: config.destruction.punchRadius }, damage: config.destruction.punchDamage, impulse: config.destruction.punchImpulse });
+    const tm = newTimes();
+    stepN(env, 60, tm);
+    console.log(`terrace ${spec.id}: punch ${fmt(performance.now() - t0 - tm.phys - tm.sim, 1)} ms; first 6 steps (phys+sim): ` + tm.physArr.slice(0, 6).map((v, i) => fmt(v + tm.simArr[i], 1)).join(' ') + ` | max ${fmt(tm.maxPhys, 1)}+${fmt(tm.maxSim, 1)}`);
+  }
 }
 
 const which = process.argv[2] ?? 'all';
@@ -337,6 +412,8 @@ const which = process.argv[2] ?? 'all';
   if (which === 't0') await t0();
   if (which === 't5') await t5();
   if (which === 't6') await t6();
+  if (which === 't7') await t7();
+  if (which === 't8') await t8();
   if (which === 't1' || which === 'all') await t1();
   if (which === 't2' || which === 'all') await t2();
   if (which === 't3' || which === 'all') await t3();

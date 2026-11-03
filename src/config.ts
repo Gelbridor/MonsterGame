@@ -126,11 +126,12 @@ export const config = {
     punchReach: 12,
     punchHeight: 8,
     /**
-     * Structural stress solver budget per physics step, in CG iterations x (bonds + pieces), shared
-     * by all awake buildings (~0.1 us each on a desktop CPU, so 20,000 is about 2 ms). The quality
-     * tier scales it (preset.solverWorkScale). Unfinished solves resume next step.
+     * Structural stress solver time budget per physics step (ms), shared by all awake buildings.
+     * The solver measures its own speed and converts this into work, so it holds on any CPU. The
+     * quality tier scales it (preset.solverWorkScale). Unfinished solves resume next step; landing
+     * bodies may use up to twice this on top.
      */
-    solverWorkPerStep: 20000,
+    solverMsPerStep: 1.5,
     /**
      * Mean force while a member is crushed, as a fraction of its peak capacity (post-peak softening:
      * buckled, hinged members carry little). Sets how much energy a crush absorbs from a falling mass.
