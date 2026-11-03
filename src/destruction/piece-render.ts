@@ -351,6 +351,8 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   const PREP_BUDGET_MS = 3;
   const GRID_CELL = 3;
   let prepDeadline = 0;
+  /** Looks a woken building will draw: their batches are created one per frame in update(), not at first use. */
+  const wantLooks = new Set<Look>();
   const prepJobs: Array<{ b: WokenBuilding; gen: Generator<void, void, void> }> = [];
 
   function* prepareGen(b: WokenBuilding): Generator<void, void, void> {
@@ -463,11 +465,12 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
         }
       };
 
-      const clipTri = (i0: number, i1: number, i2: number): void => {
+      const clipTri = function* (i0: number, i1: number, i2: number): Generator<void, void, void> {
         const ids = [i0, i1, i2];
         const poly: number[][] = ids.map((_id, c) => [c === 0 ? 1 : 0, c === 1 ? 1 : 0, c === 2 ? 1 : 0, loc[c * 3], loc[c * 3 + 1], loc[c * 3 + 2]]);
         const stack: number[][][] = [poly];
         while (stack.length > 0) {
+          if (performance.now() > prepDeadline) yield;
           const p = stack.pop()!;
           let cut = false;
           for (let ax = 0; ax < 3 && !cut; ax++) {
@@ -507,7 +510,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
 
       for (const r of ranges) {
         for (let t = r.start; t < r.start + r.count; t += 3) {
-          if ((++work & 255) === 0 && performance.now() > prepDeadline) yield;
+          if ((++work & 63) === 0 && performance.now() > prepDeadline) yield;
           const i0 = ia[t], i1 = ia[t + 1], i2 = ia[t + 2];
           if (i0 === i1 && i1 === i2) continue;
           let spans = false;
@@ -524,8 +527,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
             if (c === c) spans = true;
           }
           if (spans) {
-            clipTri(i0, i1, i2);
-            if (performance.now() > prepDeadline) yield;
+            yield* clipTri(i0, i1, i2);
             continue;
           }
           reserveVerts(3);
@@ -542,17 +544,20 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
           nv += 3;
         }
       }
-      console.warn('PROF mesh ' + (src.userData?.part as string) + ' nv=' + nv + ' srcTris=' + ranges.reduce((a, r) => a + r.count / 3, 0));
       if (performance.now() > prepDeadline) yield;
 
       // private copy of this part's triangles; the shared merged mesh loses them
       const g = new THREE.BufferGeometry();
-      names.forEach((n, a) => g.setAttribute(n, new THREE.BufferAttribute(out[a].slice(0, nv * sizes[a]), sizes[a])));
+      for (let a = 0; a < names.length; a++) {
+        g.setAttribute(names[a], new THREE.BufferAttribute(out[a].slice(0, nv * sizes[a]), sizes[a]));
+        if (performance.now() > prepDeadline) yield;
+      }
       const idx = new Uint32Array(nv);
       for (let i = 0; i < nv; i++) idx[i] = i;
       g.setIndex(new THREE.BufferAttribute(idx, 1));
       g.computeBoundingSphere();
       g.computeBoundingBox();
+      if (performance.now() > prepDeadline) yield;
       const m = new THREE.Mesh(g, interiorMaterial(src.material as THREE.Material));
       m.name = `${src.name}-woken${b.specId}`;
       m.userData = src.userData;
@@ -576,14 +581,9 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     prepDeadline = performance.now() + ms;
     while (prepJobs.length > 0 && performance.now() < prepDeadline) {
       const job = prepJobs[0];
-      const t0 = performance.now();
-      const done = job.gen.next().done;
-      const t1 = performance.now();
-      if (t1 - t0 > 6) console.warn('PROF slice ' + (t1 - t0).toFixed(1));
-      if (done) {
+      if (job.gen.next().done) {
         prepJobs.shift();
         finishPrepare(job.b);
-        console.warn('PROF finishPrepare ' + (performance.now() - t1).toFixed(1));
       }
     }
   }
@@ -615,6 +615,10 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
 
   function finishPrepare(b: WokenBuilding): void {
     b.assigned = true;
+    for (const ps of b.pieces) {
+      if (!ps) continue;
+      for (let i = 0; i < ps.votes.length; i++) if (ps.votes[i] > 0) wantLooks.add(VOTE_LOOKS[i]);
+    }
     // take-overs requested while it was being prepared
     const q = b.queue;
     b.queue = [];
@@ -890,6 +894,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     };
     b.pieces[piece.index] = pc;
     pieceStates.set(piece, pc);
+    wantLooks.add(look);
     // Interior structure is drawn 2 cm smaller so faces flush with the facade do not z-fight it.
     const h = reserve(look, tintOf(piece), false, pc, piece, structural ? 0.02 : 0);
     return h.id;
@@ -1061,6 +1066,15 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   function update(): void {
     for (const wb of woken.values()) if (!wb.prepStarted) requestPrepare(wb);
     if (prepJobs.length > 0) runPrep(PREP_BUDGET_MS);
+    if (wantLooks.size > 0) {
+      for (const lk of wantLooks) {
+        wantLooks.delete(lk);
+        if (!(batches.get(lk)?.length)) {
+          newBatch(lk); // one per frame: allocating a batch is not free
+          break;
+        }
+      }
+    }
     if (pendingWake.size > 0) {
       for (const id of pendingWake) hideAll(id);
       pendingWake.clear();
