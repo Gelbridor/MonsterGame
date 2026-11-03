@@ -1,6 +1,6 @@
 # Monster Brawl: destruction tech demo plan
 
-Owner: @Tommy · Created 2 Nov 2026 · Last revised 3 Nov 2026
+Owner: @Tommy · Created 2 Nov 2026 · Last revised 3 Nov 2026 (evening)
 
 This is the design document. It says **what** to build and **in what order**.
 For the current state of the code, open faults and how to pick up the work, read [`handoff.md`](handoff.md).
@@ -9,9 +9,10 @@ For the current state of the code, open faults and how to pick up the work, read
 
 | Phase | State |
 | --- | --- |
-| 1 · Foundations | Built and live on GitHub Pages. **Gate not yet signed off** (awaiting a phone test). |
-| Graphics pass (pulled forward from Phase 5) | Built at the owner's request and live. A polish round is outstanding; see `handoff.md`. |
-| 2 · Destruction core | Not started. **Next after the Phase 1 gate.** |
+| 1 · Foundations | Built and live on GitHub Pages. **Gate not yet formally signed off**; the owner plays the live build on a ThinkPad T480. |
+| Graphics pass (pulled forward from Phase 5) | Built and live, with two polish rounds. Small known faults remain; see `handoff.md`. |
+| 2 · Destruction core | **In progress, live as a test build.** Stress solver, crushing and progressive collapse, debug punch, piece renderer, panel tunables. Gate: punch ✅, collapse under gravity ✅, phone frame rate during a full collapse not yet measured. |
+| Performance (cross-cutting) | GPU-aware auto quality, WebGL on integrated GPUs, dynamic render resolution and automatic tier step-down are live. Low-tier materials still need cheaper variants for integrated GPUs. |
 | 3 · Scale and performance | Not started |
 | 4 · Moves and game feel | Not started |
 | 5 · Effects, audio and polish | Not started (except the graphics pass) |
@@ -47,7 +48,7 @@ The game uses Three.js for rendering, Rapier for physics and Vite for builds, an
 | --- | --- | --- |
 | Rendering | Three.js `WebGPURenderer` with TSL node materials; automatic WebGL 2 fallback | Modern lighting and post-processing; works on iPhone Safari and desktop Chrome |
 | Physics | Rapier (Rust compiled to WebAssembly) | Fast rigid bodies, can sleep thousands of idle chunks, deterministic |
-| Fracture | Pre-fractured shards linked by breakable physics joints; extra runtime fracture on PC | Real-time fracturing is too slow on phones; pre-cut pieces look the same |
+| Fracture | Pre-cut box pieces bonded in a graph; a structural stress solver (alongside Rapier) decides which bonds break; broken pieces split into Voronoi shards | Rapier's browser build exposes no joint forces; a real stress solve on the bond graph gives load redistribution without scripting |
 | Effects | GPU particles (instanced), decals, volumetric-style dust sprites | Thousands of particles for little CPU cost |
 | Audio | Web Audio API with layered, pitch-varied samples | Every impact sounds different |
 | Build | Vite + TypeScript | Quick reloads while tuning; small output |
@@ -112,8 +113,8 @@ Step 8 keeps a fully wrecked city cheap to draw.
 
 Collapse is fully simulated. Nothing is scripted or animated.
 
-- **Breakable joints.** Every piece is a real Rapier rigid body with true mass. It is held to its neighbours by fixed joints, and each joint has a strength set by its material.
-- **Stress decides failure.** Every physics step reads the force and twisting load on each joint. When the load exceeds the joint's strength, the joint breaks.
+- **Breakable bonds.** Every piece has true mass. Connected pieces move as one Rapier compound body (fixed while it has a ground path, dynamic once it loses it), held together by bonds whose strength is set by their material.
+- **Stress decides failure.** A structural solve of each awake building's bond graph (stiff springs carrying axial, shear and bending load) spreads true weight, landing forces and impacts through the structure. A bond breaks when its load exceeds its strength; one failing in compression crushes the member. Groups split into new bodies by connected components.
 - **Load is real weight.** A ground-floor column carries the actual mass of every floor above it. Knock out its neighbours and the remaining columns overload and give way by themselves.
 - **Steel yields before it snaps.** Steel frames use spring-limited joints that bend under load, so towers creak and lean for real before they go.
 - **Emergent collapse.** Pancaking, toppling, one-sided leaning and walls peeling away all come from gravity, mass and joint strength. No collapse animation is played.
@@ -300,12 +301,15 @@ Debris pooling and rubble merging are built in Phase 2, before more polish, for 
 - [x] Graphics: as high quality as possible, held to a strict visual bar, pulled forward ahead of Phase 2 (owner's request, 3 Nov 2026)
 - [x] Ultra anti-aliasing: SMAA for now; TRAA needs rain drawn after the resolve
 - [x] Hosting: GitHub Pages from `main`
+- [x] Destruction stress: a structural stress solver on each building's bond graph alongside Rapier, not Rapier joint forces (owner decision, 3 Nov 2026)
+- [x] Punch damage 200, so a punch takes out the concrete or stone piece it hits (gate); steel needs several hits
+- [x] Quality auto-detect uses the GPU, not CPU cores; integrated GPUs start on WebGL 2 at Low (owner's T480 measured faster on WebGL)
 
 **Open questions**
 
 - [ ] Final name for the demo
 - [ ] Confirm the reconstructed Phase 2–5 roadmap above
-- [ ] Which phones to treat as the "mid-range" reference for the 30 fps target
+- [ ] Which phones to treat as the "mid-range" reference for the 30 fps target (the owner's ThinkPad T480 with Intel UHD 620 is the current low-end PC reference)
 - [ ] Audio source: free libraries, synthesised, or commissioned
 
 ## Building with Claude Code
