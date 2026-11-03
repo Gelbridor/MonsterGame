@@ -45,11 +45,11 @@ export const BONE_REST: Record<BoneName, { parent: BoneName | null; offset: [num
   pelvis: { parent: null, offset: [0, 10.6, 1.4] },
   spine: { parent: 'pelvis', offset: [0, 2.8, -0.4] },
   chest: { parent: 'spine', offset: [0, 3.2, -0.8] },
-  neck: { parent: 'chest', offset: [0, 3.8, -2.4] },
-  head: { parent: 'neck', offset: [0, 1.0, -2.0] },
+  neck: { parent: 'chest', offset: [0, 5.0, -2.2] },
+  head: { parent: 'neck', offset: [0, 1.4, -2.0] },
   jaw: { parent: 'head', offset: [0, -1.3, -0.9] },
-  shoulderR: { parent: 'chest', offset: [8.0, 4.2, -0.8] },
-  shoulderL: { parent: 'chest', offset: [-8.0, 4.2, -0.8] },
+  shoulderR: { parent: 'chest', offset: [8.0, 3.6, -0.8] },
+  shoulderL: { parent: 'chest', offset: [-8.0, 3.6, -0.8] },
   upperArmR: { parent: 'shoulderR', offset: [0, 0, 0] },
   upperArmL: { parent: 'shoulderL', offset: [0, 0, 0] },
   foreArmR: { parent: 'upperArmR', offset: [0, -7.8, 0] },
@@ -313,7 +313,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
     const hd = `hand${side}` as BoneName;
 
     // Shoulder: huge pauldron cluster.
-    rock(sh, 2, [0.9 * s, 0.9, 0.2], [4.8, 3.8, 4.4], { crack: 1.1 }, { amp: 0.22, squarish: 0.2 });
+    rock(sh, 2, [0.9 * s, 0.9, 0.2], [4.8, 3.8, 4.4], { crack: 0.7 }, { amp: 0.22, squarish: 0.2 });
     rock(sh, 1, [-1.8 * s, 0.4, 0.1], [3.2, 2.8, 3.2]); // trapezius merging into the chest
     plate(sh, [1.2 * s, 2.8, 0.1], [5.2, 1.0, 4.2], [0.05, 0, -0.32 * s], { crack: 0.6 });
     col(sh, [1.0 * s, 2.3, 0.4], [0.2, 0, -0.55 * s], 1.05, 3.6, { crack: 0.5 }, { tip: 1.0 });
@@ -329,9 +329,9 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
 
     // Forearm: massive.
     collar(fa, [0, 0.1, 0], [2.4, 0.5, 2.4], 0.9);
-    bundle(fa, [0, -0.3, 0], [0, -1, 0], 3.7, 8.4, 1, { taper: 0.9, crack: 2.4, lenVar: 0.4, coreLava: 0.3 });
+    bundle(fa, [0, -0.3, 0], [0, -1, 0], 3.7, 8.4, 1, { taper: 0.9, crack: 1.6, lenVar: 0.4, coreLava: 0.3 });
     rock(fa, 2, [0, -0.9, 0.4], [3.1, 2.2, 3.2], { crack: 1.6 }, { amp: 0.2 });
-    rock(fa, 1, [0.5 * s, -4.5, -0.6], [2.9, 3.6, 2.7], { crack: 1.9 }, { amp: 0.2, squarish: 0.25 }); // outer bracer
+    rock(fa, 1, [0.5 * s, -4.5, -0.6], [2.9, 3.6, 2.7], { crack: 1.3 }, { amp: 0.2, squarish: 0.25 }); // outer bracer
     col(fa, [0, -0.4, 2.7], [1.3, 0, 0], 0.9, 3.4, {}, { tip: 1.0 }); // elbow spike
     col(fa, [0.2 * s, -0.6, 2.4], [1.0, 0, -0.5 * s], 0.65, 2.4, {}, { tip: 0.6 });
 
@@ -354,9 +354,9 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
     const sn = `shin${side}` as BoneName;
     const ft = `foot${side}` as BoneName;
 
-    rock(th, 2, [0.3 * s, 0.2, 0], [3.5, 2.4, 3.5], { crack: 1.4 }, { amp: 0.18 });
-    bundle(th, [0, 0, 0], [0, -1, 0], 3.3, 5.1, 2, { taper: 0.88, crack: 1.4 });
-    rock(th, 1, [0.9 * s, -1.9, -0.2], [2.8, 3.0, 3.1], { crack: 1.5 }, { amp: 0.2, squarish: 0.2 });
+    rock(th, 2, [0.3 * s, 0.2, 0], [3.5, 2.4, 3.5], { crack: 0.6 }, { amp: 0.18 });
+    bundle(th, [0, 0, 0], [0, -1, 0], 3.3, 5.1, 2, { taper: 0.88, crack: 0.7 });
+    rock(th, 1, [0.9 * s, -1.9, -0.2], [2.8, 3.0, 3.1], { crack: 0.6 }, { amp: 0.2, squarish: 0.2 });
     rock(th, 2, [0, -4.9, -1.2], [2.6, 2.2, 2.0], { crack: 1.3 }, { amp: 0.2 }); // knee cap
 
     collar(sn, [0, 0.2, 0], [2.4, 0.55, 2.4], 0.9);
