@@ -101,6 +101,8 @@ const LEG_LEN = THIGH_LEN + SHIN_LEN;
 /** Fraction of full leg length used when standing: keeps the knees bent (crouched, heavy). */
 const STAND_REACH = 0.845;
 const PELVIS_Z = BONE_REST.pelvis.offset[2];
+/** Fraction of a swing at which the foot reaches its landing spot; the rest is a pure drop. */
+const LAND_AT = 0.94;
 
 interface Foot {
   side: 1 | -1;
@@ -195,7 +197,11 @@ export class BasaltAnimator {
     // Wire the pose from the rest pose so the first frame is sane.
     this.cur.pelvisY = 10.6;
     this.cur.pelvisZ = PELVIS_Z;
+    // Lava at its resting brightness from the very first frame (a zero pulse hid every crack
+    // until the first fixed step had run).
+    this.cur.pulse = 1;
     this.prev = { ...this.cur };
+    this.out = { ...this.cur };
   }
 
   /** Remove and return footsteps since the last call (alternative to the callback). */
@@ -289,14 +295,23 @@ export class BasaltAnimator {
     for (const f of this.feet) {
       if (!f.swinging) continue;
       f.t += dt / f.dur;
-      const trem = Math.max(0, (1 - Math.min(1, f.t)) * f.dur);
-      const hp = h + this.turn.x * trem * 0.7;
-      // Predicted body position at landing.
-      this.tmpA.set(P.x + vel.x * trem, P.y, P.z + vel.z * trem);
-      this.neutralTarget(f, this.tmpA, hp, halfS, f.to);
-      f.toYaw = hp + f.side * 0.1;
+      // Re-aim at the predicted landing spot until the foot has arrived (94 %), then freeze
+      // it: re-aiming in the last frames made the foot skid by up to one frame of body
+      // travel at touchdown (the landing frame overshoots the predicted landing time).
+      if (f.t < LAND_AT) {
+        const trem = Math.max(0, (1 - Math.min(1, f.t)) * f.dur);
+        const hp = h + this.turn.x * trem * 0.7;
+        // Predicted body position at landing.
+        this.tmpA.set(P.x + vel.x * trem, P.y, P.z + vel.z * trem);
+        this.neutralTarget(f, this.tmpA, hp, halfS, f.to);
+        f.toYaw = hp + f.side * 0.1;
+      }
       const u = clamp(f.t, 0, 1);
-      const e = u * u * (3 - 2 * u);
+      // Travel finishes at LAND_AT of the swing, while the foot is still ~0.3 m up, and the
+      // last stretch is a pure drop: the sole is never on the ground while it is still
+      // moving sideways (that read as a skid at touchdown).
+      const w = clamp(u / LAND_AT, 0, 1);
+      const e = w * w * (3 - 2 * w);
       f.pos.x = lerp(f.from.x, f.to.x, e);
       f.pos.z = lerp(f.from.z, f.to.z, e);
       f.pos.y = lerp(f.from.y, f.to.y, e);

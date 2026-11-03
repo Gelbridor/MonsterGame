@@ -125,7 +125,7 @@ export function createBasalt(
   const wanted = quality.level === 'low' ? 0 : quality.level === 'ultra' ? 2 : 1;
   const lightCount = Math.min(wanted, quality.maxDynamicLights);
   const lights: THREE.PointLight[] = [];
-  const lightBase = [420, 160];
+  const lightBase = [300, 120];
   const lightColor = [0xff9a45, 0xff7a30];
   const lightPos: [number, number, number][] = [
     [0, 2.5, -10],

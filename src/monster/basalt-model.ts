@@ -5,8 +5,9 @@
 // Rest pose: feet at y = 0, facing -Z, +X is Basalt's right. All bones have
 // identity rest rotation; the animator poses them. Dimensions:
 //
-//   pelvis y 10.6 | chest y 16.6 | shoulders y 21.2, x +-6.9 | head y 21.8, z -5.6
-//   tallest back column ~ y 30 | legs 9.9 m (hip y 9.7, ankle 1.5 above ground)
+//   pelvis y 10.6 | chest y 16.6 | shoulders y 20.2, x +-8 | head y 24, z -4.6
+//   back ridge kept low (~y 24) so the head and crest clear it from the default
+//   gameplay camera (behind and above) | legs 9.9 m (hip y 9.7, ankle 1.5 above ground)
 //   arms hang ~17 m from the shoulder, fists ~3 m above the ground.
 
 import * as THREE from 'three/webgpu';
@@ -45,11 +46,11 @@ export const BONE_REST: Record<BoneName, { parent: BoneName | null; offset: [num
   pelvis: { parent: null, offset: [0, 10.6, 1.4] },
   spine: { parent: 'pelvis', offset: [0, 2.8, -0.4] },
   chest: { parent: 'spine', offset: [0, 3.2, -0.8] },
-  neck: { parent: 'chest', offset: [0, 3.8, -2.4] },
-  head: { parent: 'neck', offset: [0, 1.0, -2.0] },
+  neck: { parent: 'chest', offset: [0, 6.0, -2.6] },
+  head: { parent: 'neck', offset: [0, 1.4, -2.0] },
   jaw: { parent: 'head', offset: [0, -1.3, -0.9] },
-  shoulderR: { parent: 'chest', offset: [8.0, 4.2, -0.8] },
-  shoulderL: { parent: 'chest', offset: [-8.0, 4.2, -0.8] },
+  shoulderR: { parent: 'chest', offset: [8.0, 3.6, -0.8] },
+  shoulderL: { parent: 'chest', offset: [-8.0, 3.6, -0.8] },
   upperArmR: { parent: 'shoulderR', offset: [0, 0, 0] },
   upperArmL: { parent: 'shoulderL', offset: [0, 0, 0] },
   foreArmR: { parent: 'upperArmR', offset: [0, -7.8, 0] },
@@ -233,7 +234,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
   rock('chest', 2, [0, 1.4, -0.2], [5.8, 5.2, 4.8], { crack: 1.0 }, { amp: 0.17 });
   rock('chest', 2, [0, 4.0, 1.2], [4.8, 2.8, 3.4], { crack: 2.0 }, { amp: 0.2 });
   // Molten seam running down the spine between the column bundles.
-  plate('chest', [0, 2.8, 3.1], [1.1, 6.5, 0.9], [0.35, 0, 0], { lava: 0.85, crack: 0 }, 0.05);
+  plate('chest', [0, 2.8, 3.1], [1.1, 6.5, 0.9], [0.35, 0, 0], { lava: 0.4, crack: 0 }, 0.05);
   rock('chest', 1, [4.2, 0.9, 0.0], [2.4, 3.2, 3.2]);
   rock('chest', 1, [-4.2, 0.9, 0.0], [2.4, 3.2, 3.2]);
   // Pecs: broad plates, riddled with cracks, framing the core.
@@ -250,15 +251,15 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
   }
   collar('chest', [0, 5.7, -2.2], [3.2, 0.75, 2.6], 0.75);
   // Back ridges: one central ridge and two shorter flanking ridges down the spine.
-  bundle('chest', [0, 4.2, 1.8], [0, 0.85, 0.5], 2.0, 6.0, 1, { taper: 0.7, crack: 1.4, lenVar: 0.5, coreLava: 0.35 });
+  bundle('chest', [0, 3.6, 1.8], [0, 0.7, 0.7], 2.0, 3.8, 1, { taper: 0.7, crack: 1.0, lenVar: 0.3, coreLava: 0.35 });
   const ridge = (x: number, n: number, len: number): void => {
     for (let i = 0; i < n; i++) {
       const t = n > 1 ? i / (n - 1) : 0;
       col('chest', [x, 3.2 - t * 3.2, 2.6 + t * 0.5], [0.45 + t * 0.2, 0, -x * 0.07], 0.75, len * (1 - t * 0.35) + rng() * 1.2, { crack: 0.8 }, { tip: rng() < 0.5 ? 0.8 : 0 });
     }
   };
-  ridge(2.4, Math.max(2, Math.round(3 * richness)), 3.8);
-  ridge(-2.4, Math.max(2, Math.round(3 * richness)), 3.8);
+  ridge(2.4, Math.max(2, Math.round(3 * richness)), 2.8);
+  ridge(-2.4, Math.max(2, Math.round(3 * richness)), 2.8);
   // Rubble on the back.
   for (let i = 0; i < Math.round(5 * richness); i++) {
     rock('chest', 0, [(rng() - 0.5) * 7, 1 + rng() * 5, 2.5 + rng() * 1.6], 0.7 + rng() * 1.1, {}, { r: [rng() * 3, rng() * 3, 0] });
@@ -272,7 +273,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
 
   // Skull, brow, muzzle.
   rock('head', 2, [0, 0.3, -0.4], [2.55, 2.15, 2.65], {}, { amp: 0.14 });
-  plate('head', [0, 1.15, -2.3], [5.3, 0.95, 1.7], [-0.18, 0, 0], { crack: 0.4 }, 0.18); // heavy brow
+  plate('head', [0, 1.2, -2.3], [4.6, 0.95, 1.7], [-0.18, 0, 0], { crack: 0.4 }, 0.18); // heavy brow
   col('head', [2.5, 1.3, -1.8], [0.5, 0, -1.1], 0.6, 2.5, {}, { tip: 0.8 }); // brow horns sweep out and back
   col('head', [-2.5, 1.3, -1.8], [0.5, 0, 1.1], 0.6, 2.5, {}, { tip: 0.8 });
   rock('head', 1, [0, -0.75, -3.1], [1.75, 1.0, 1.9], { crack: 0.5 }, { amp: 0.14 }); // snout
@@ -280,7 +281,10 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
   rock('head', 1, [-2.0, -0.3, -1.5], [1.1, 1.3, 1.5]);
   // Eyes: white-hot slits sunk under the brow, inner ends low (angry).
   for (const s of [-1, 1]) {
-    plate('head', [s * 1.05, 0.28, -3.0], [1.15, 0.4, 0.5], [0, s * 0.35, s * 0.34], { lava: 1.8, crack: 0 }, 0.05);
+    // Wide-set slits that wrap round the temples, so they glint past the skull
+    // when seen from behind and above (the gameplay camera).
+    plate('head', [s * 2.5, 0.6, -1.4], [0.75, 0.6, 2.0], [0, 0, -s * 0.18], { lava: 1.8, crack: 0 }, 0.05);
+    plate('head', [s * 0.75, 0.22, -3.05], [0.8, 0.38, 0.45], [0, s * 0.3, s * 0.34], { lava: 1.8, crack: 0 }, 0.05);
   }
   // Mouth glow between the jaws.
   plate('head', [0, -1.35, -2.65], [2.6, 0.55, 1.9], [0, 0, 0], { lava: 1.0, crack: 0 }, 0.1);
@@ -313,7 +317,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
     const hd = `hand${side}` as BoneName;
 
     // Shoulder: huge pauldron cluster.
-    rock(sh, 2, [0.9 * s, 0.9, 0.2], [4.8, 3.8, 4.4], { crack: 1.1 }, { amp: 0.22, squarish: 0.2 });
+    rock(sh, 2, [0.9 * s, 0.9, 0.2], [4.8, 3.8, 4.4], { crack: 0.7 }, { amp: 0.22, squarish: 0.2 });
     rock(sh, 1, [-1.8 * s, 0.4, 0.1], [3.2, 2.8, 3.2]); // trapezius merging into the chest
     plate(sh, [1.2 * s, 2.8, 0.1], [5.2, 1.0, 4.2], [0.05, 0, -0.32 * s], { crack: 0.6 });
     col(sh, [1.0 * s, 2.3, 0.4], [0.2, 0, -0.55 * s], 1.05, 3.6, { crack: 0.5 }, { tip: 1.0 });
@@ -329,9 +333,9 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
 
     // Forearm: massive.
     collar(fa, [0, 0.1, 0], [2.4, 0.5, 2.4], 0.9);
-    bundle(fa, [0, -0.3, 0], [0, -1, 0], 3.7, 8.4, 1, { taper: 0.9, crack: 2.4, lenVar: 0.4, coreLava: 0.3 });
+    bundle(fa, [0, -0.3, 0], [0, -1, 0], 3.7, 8.4, 1, { taper: 0.9, crack: 1.6, lenVar: 0.4, coreLava: 0.3 });
     rock(fa, 2, [0, -0.9, 0.4], [3.1, 2.2, 3.2], { crack: 1.6 }, { amp: 0.2 });
-    rock(fa, 1, [0.5 * s, -4.5, -0.6], [2.9, 3.6, 2.7], { crack: 1.9 }, { amp: 0.2, squarish: 0.25 }); // outer bracer
+    rock(fa, 1, [0.5 * s, -4.5, -0.6], [2.9, 3.6, 2.7], { crack: 1.3 }, { amp: 0.2, squarish: 0.25 }); // outer bracer
     col(fa, [0, -0.4, 2.7], [1.3, 0, 0], 0.9, 3.4, {}, { tip: 1.0 }); // elbow spike
     col(fa, [0.2 * s, -0.6, 2.4], [1.0, 0, -0.5 * s], 0.65, 2.4, {}, { tip: 0.6 });
 
@@ -354,9 +358,9 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
     const sn = `shin${side}` as BoneName;
     const ft = `foot${side}` as BoneName;
 
-    rock(th, 2, [0.3 * s, 0.2, 0], [3.5, 2.4, 3.5], { crack: 1.4 }, { amp: 0.18 });
-    bundle(th, [0, 0, 0], [0, -1, 0], 3.3, 5.1, 2, { taper: 0.88, crack: 1.4 });
-    rock(th, 1, [0.9 * s, -1.9, -0.2], [2.8, 3.0, 3.1], { crack: 1.5 }, { amp: 0.2, squarish: 0.2 });
+    rock(th, 2, [0.3 * s, 0.2, 0], [3.5, 2.4, 3.5], { crack: 0.6 }, { amp: 0.18 });
+    bundle(th, [0, 0, 0], [0, -1, 0], 3.3, 5.1, 2, { taper: 0.88, crack: 0.7 });
+    rock(th, 1, [0.9 * s, -1.9, -0.2], [2.8, 3.0, 3.1], { crack: 0.6 }, { amp: 0.2, squarish: 0.2 });
     rock(th, 2, [0, -4.9, -1.2], [2.6, 2.2, 2.0], { crack: 1.3 }, { amp: 0.2 }); // knee cap
 
     collar(sn, [0, 0.2, 0], [2.4, 0.55, 2.4], 0.9);
