@@ -31,8 +31,8 @@ import type { DMaterial, PieceKind } from './types';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type N = any;
 
-export type Look = 'brick' | 'concrete' | 'stone' | 'glass' | 'steel' | 'wood' | 'slate';
-export const LOOKS: readonly Look[] = ['brick', 'concrete', 'stone', 'glass', 'steel', 'wood', 'slate'];
+export type Look = 'brick' | 'concrete' | 'stone' | 'soot' | 'glass' | 'steel' | 'wood' | 'slate';
+export const LOOKS: readonly Look[] = ['brick', 'concrete', 'stone', 'soot', 'glass', 'steel', 'wood', 'slate'];
 
 /** Which look a piece draws with. Roofs use the slate look whatever their stored material. */
 export function lookFor(material: DMaterial, kind: PieceKind): Look {
@@ -149,7 +149,7 @@ export function createPieceMaterials(quality: QualityPreset, mode: MaterialMode)
     let outer: N = mix(avg, bc, fine);
     outer = mix(outer, c3(o.mortar), mortarM);
     const patch = vnoise(vec2(u, v).mul(0.27).add(seed.mul(40.0)));
-    outer = outer.mul(patch.mul(0.35).add(0.85));
+    outer = outer.mul(patch.mul(0.35).add(0.85)).mul(0.8); // the town's wet-night darkening
 
     // raw core: crumbly body with mortar / grit flecks
     const n = rawNoise(o.coreFleck);
@@ -170,6 +170,13 @@ export function createPieceMaterials(quality: QualityPreset, mode: MaterialMode)
   masonry(out.stone, {
     courseH: 0.36, brickL: 0.85, mortarW: 0.014, lenVar: 0.55, palette: [0xa48860, 0x8a7352, 0x4a4036, 0xb89d70], mortar: 0x6d6556,
     rough: 0.85, core: [0xc7b48c, 0xa7966f, 0x786d58], coreFleck: 30,
+  });
+
+  // the town's soot-blackened stone (church, hall tower): darker palette and a darker raw core
+  out.soot = mk();
+  masonry(out.soot, {
+    courseH: 0.3, brickL: 0.7, mortarW: 0.014, lenVar: 0.5, palette: [0x5c564b, 0x474239, 0x2a2622, 0x6b6253], mortar: 0x3d382f,
+    rough: 0.9, core: [0x6f695d, 0x544e43, 0x3b3731], coreFleck: 30,
   });
 
   // ---------------------------------------------------------- concrete
@@ -252,21 +259,15 @@ export function createPieceMaterials(quality: QualityPreset, mode: MaterialMode)
     // Sash grid: ~0.9 x 1.2 m panes split by thin dark bars; each pane is lit or dark on its own.
     const pw = 0.9, ph = 1.2;
     const gu = u.div(pw), gv = v.div(ph);
-    const cell = vec2(floor(gu), floor(gv));
-    const lit = smoothstep(0.64, 0.7, h21(cell.add(seed.mul(61.0))));
-    const warm = h21(cell.add(vec2(7.0, seed.mul(13.0))));
-    const lampColor = mix(c3(0xffb866), c3(0xcfe6ff), smoothstep(0.86, 0.97, warm));
+    // Broken glass is dark with an edge highlight: no lit-pane grid (it turns into yellow speckle at shard scale).
     const bar = min(min(fract(gu), oneMinus(fract(gu))).mul(pw), min(fract(gv), oneMinus(fract(gv))).mul(ph));
     const frame = oneMinus(smoothstep(0.018, 0.03, bar));
-    const room = vnoise(vec2(u, v).mul(2.2).add(seed.mul(30.0))).mul(0.55).add(0.45);
-    const curtain = smoothstep(0.0, 1.0, fract(gv)).mul(0.5).add(0.5);
     const sky = mix(c3(0x05080c), c3(0x0c1620), vnoise(vec2(u, v).mul(0.6).add(seed.mul(5.0))));
     const outer: N = mix(sky, c3(0x101215), frame);
     const core: N = mix(c3(0x5f7c78), c3(0x8aa8a3), rawNoise(22.0));
-    const glow = lampColor.mul(room).mul(curtain).mul(lit).mul(oneMinus(frame)).mul(0.45);
     finish(
       out.glass, select(inner, core, outer), select(inner, 0.22, mix(float(0.06), float(0.5), frame)), float(0),
-      select(inner, vec3(0.0), glow),
+      vec3(0.0),
     );
   }
 
