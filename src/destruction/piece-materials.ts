@@ -106,6 +106,8 @@ export function createPieceMaterials(quality: QualityPreset, mode: MaterialMode)
     let a: N = albedo;
     // overall soot / wear with damage
     a = a.mul(oneMinus(damage.mul(0.28)));
+    // raw broken cores read paler than the weathered skin; at night they must not glow
+    a = select(inner, a.mul(0.6), a);
     if (D >= 1) a = mix(a, a.mul(0.18), cracks().mul(0.85));
     m.colorNode = mode === 'static' ? a.mul(tint.rgb) : a;
     m.roughnessNode = rough;
@@ -261,7 +263,7 @@ export function createPieceMaterials(quality: QualityPreset, mode: MaterialMode)
     const sky = mix(c3(0x05080c), c3(0x0c1620), vnoise(vec2(u, v).mul(0.6).add(seed.mul(5.0))));
     const outer: N = mix(sky, c3(0x101215), frame);
     const core: N = mix(c3(0x5f7c78), c3(0x8aa8a3), rawNoise(22.0));
-    const glow = lampColor.mul(room).mul(curtain).mul(lit).mul(oneMinus(frame)).mul(0.9);
+    const glow = lampColor.mul(room).mul(curtain).mul(lit).mul(oneMinus(frame)).mul(0.45);
     finish(
       out.glass, select(inner, core, outer), select(inner, 0.22, mix(float(0.06), float(0.5), frame)), float(0),
       select(inner, vec3(0.0), glow),

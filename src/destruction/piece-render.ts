@@ -262,46 +262,171 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     pendingWake.add(specId);
   }
 
-  function assignTriangles(b: WokenBuilding): void {
+  /** Distinct, sorted box-face coordinates per local axis: the planes the town triangles are cut on. */
+  function boxPlanes(b: WokenBuilding): number[][] {
+    const planes: number[][] = [[], [], []];
+    for (const ps of b.pieces) {
+      if (!ps) continue;
+      for (let ax = 0; ax < 3; ax++) planes[ax].push(ps.box[ax] - ps.box[3 + ax], ps.box[ax] + ps.box[3 + ax]);
+    }
+    return planes.map((p) => {
+      p.sort((a, c) => a - c);
+      const out: number[] = [];
+      for (const v of p) if (out.length === 0 || v - out[out.length - 1] > 1e-3) out.push(v);
+      return out;
+    });
+  }
+
+  /** Split a convex polygon (verts: b0 b1 b2 lx ly lz) by the plane local[ax] = c. */
+  function splitPoly(poly: number[][], ax: number, c: number): [number[][], number[][]] {
+    const lo: number[][] = [], hi: number[][] = [];
+    const k = 3 + ax;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], d = poly[(i + 1) % poly.length];
+      const sa = a[k] - c, sd = d[k] - c;
+      if (sa <= 0) lo.push(a);
+      if (sa >= 0) hi.push(a);
+      if ((sa < 0 && sd > 0) || (sa > 0 && sd < 0)) {
+        const t = sa / (sa - sd);
+        const m = new Array<number>(6);
+        for (let j = 0; j < 6; j++) m[j] = a[j] + (d[j] - a[j]) * t;
+        m[k] = c;
+        lo.push(m);
+        hi.push(m);
+      }
+    }
+    return [lo, hi];
+  }
+
+  /**
+   * First activation of a building: the town's triangles can be huge (a facade may be two), so they
+   * are cut on every piece-box plane into a private copy of the merged meshes, and each cut triangle
+   * is assigned to the piece whose box holds it. A break then removes only that piece's patch.
+   */
+  function prepareBuilding(b: WokenBuilding): void {
     b.assigned = true;
     const list = rangesByBuilding.get(b.specId);
     if (!list) return;
     const np = b.pieces.length;
     const bx = new Float64Array(np * 6);
     for (let i = 0; i < np; i++) if (b.pieces[i]) bx.set(b.pieces[i].box, i * 6);
+    const planes = boxPlanes(b);
+    const EPS = 1e-4;
+    const byMesh = new Map<THREE.Mesh, Array<{ start: number; count: number }>>();
     for (const r of list) {
-      const geo = r.mesh.geometry;
+      let l = byMesh.get(r.mesh);
+      if (!l) byMesh.set(r.mesh, (l = []));
+      l.push(r);
+    }
+    for (const [src, ranges] of byMesh) {
+      const geo = src.geometry;
       const index = geo.index;
-      const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
-      if (!index || !pos) continue;
-      let mi = meshList.indexOf(r.mesh);
-      if (mi < 0) mi = meshList.push(r.mesh) - 1;
+      if (!index) continue;
       const ia = index.array;
+      const names = Object.keys(geo.attributes).filter((n) => !(geo.attributes[n] as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute);
+      const srcA = names.map((n) => geo.getAttribute(n) as THREE.BufferAttribute);
+      const outA: number[][] = names.map(() => []);
+      const pos = geo.getAttribute('position') as THREE.BufferAttribute;
       const pa = pos.array as Float32Array;
-      for (let t = r.start; t < r.start + r.count; t += 3) {
-        const i0 = ia[t] * 3, i1 = ia[t + 1] * 3, i2 = ia[t + 2] * 3;
-        if (i0 === i1 && i1 === i2) continue;
-        const wx = (pa[i0] + pa[i1] + pa[i2]) / 3 - b.x;
-        const wy = (pa[i0 + 1] + pa[i1 + 1] + pa[i2 + 1]) / 3;
-        const wz = (pa[i0 + 2] + pa[i1 + 2] + pa[i2 + 2]) / 3 - b.z;
-        const lx = b.cs * wx - b.sn * wz, lz = b.sn * wx + b.cs * wz;
-        let best = -1, bd = ASSIGN_MAX, bv = Infinity;
-        for (let i = 0; i < np; i++) {
-          const o = i * 6;
-          if (bx[o + 3] === 0 && bx[o + 4] === 0) continue;
-          const dx = Math.max(0, Math.abs(lx - bx[o]) - bx[o + 3]);
-          const dy = Math.max(0, Math.abs(wy - bx[o + 1]) - bx[o + 4]);
-          const dz = Math.max(0, Math.abs(lz - bx[o + 2]) - bx[o + 5]);
-          const d = Math.hypot(dx, dy, dz);
-          if (d > bd + 1e-6) continue;
-          const vol = bx[o + 3] * bx[o + 4] * bx[o + 5];
-          if (d < bd - 1e-6 || vol < bv) {
-            bd = d;
-            bv = vol;
-            best = i;
+      const mi = meshList.length;
+      let nv = 0;
+      const stack: number[][][] = [];
+
+      const emit = (poly: number[][], i0: number, i1: number, i2: number): void => {
+        for (let f = 1; f < poly.length - 1; f++) {
+          const tri = [poly[0], poly[f], poly[f + 1]];
+          const e1x = tri[1][3] - tri[0][3], e1y = tri[1][4] - tri[0][4], e1z = tri[1][5] - tri[0][5];
+          const e2x = tri[2][3] - tri[0][3], e2y = tri[2][4] - tri[0][4], e2z = tri[2][5] - tri[0][5];
+          const cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x;
+          if (cx * cx + cy * cy + cz * cz < 1e-12) continue;
+          const lx = (tri[0][3] + tri[1][3] + tri[2][3]) / 3, ly = (tri[0][4] + tri[1][4] + tri[2][4]) / 3, lz = (tri[0][5] + tri[1][5] + tri[2][5]) / 3;
+          for (const v of tri) {
+            for (let a = 0; a < srcA.length; a++) {
+              const s = srcA[a].itemSize, arr = srcA[a].array;
+              for (let k = 0; k < s; k++) outA[a].push(v[0] * arr[i0 * s + k] + v[1] * arr[i1 * s + k] + v[2] * arr[i2 * s + k]);
+            }
+          }
+          let best = -1, bd = ASSIGN_MAX, bv = Infinity;
+          for (let i = 0; i < np; i++) {
+            const o = i * 6;
+            if (bx[o + 3] === 0 && bx[o + 4] === 0) continue;
+            const dx = Math.max(0, Math.abs(lx - bx[o]) - bx[o + 3]);
+            const dy = Math.max(0, Math.abs(ly - bx[o + 1]) - bx[o + 4]);
+            const dz = Math.max(0, Math.abs(lz - bx[o + 2]) - bx[o + 5]);
+            const d = Math.hypot(dx, dy, dz);
+            if (d > bd + 1e-6) continue;
+            const vol = bx[o + 3] * bx[o + 4] * bx[o + 5];
+            if (d < bd - 1e-6 || vol < bv) {
+              bd = d;
+              bv = vol;
+              best = i;
+            }
+          }
+          if (best >= 0) b.pieces[best].tris.push(mi * TRI_MESH + nv);
+          nv += 3;
+        }
+      };
+
+      for (const r of ranges) {
+        for (let t = r.start; t < r.start + r.count; t += 3) {
+          const i0 = ia[t], i1 = ia[t + 1], i2 = ia[t + 2];
+          if (i0 === i1 && i1 === i2) continue;
+          const ids = [i0, i1, i2];
+          const poly: number[][] = ids.map((id, c) => {
+            const wx = pa[id * 3] - b.x, wy = pa[id * 3 + 1], wz = pa[id * 3 + 2] - b.z;
+            return [c === 0 ? 1 : 0, c === 1 ? 1 : 0, c === 2 ? 1 : 0, b.cs * wx - b.sn * wz, wy, b.sn * wx + b.cs * wz];
+          });
+          stack.push(poly);
+          while (stack.length > 0) {
+            const p = stack.pop()!;
+            let cut = false;
+            for (let ax = 0; ax < 3 && !cut; ax++) {
+              const k = 3 + ax;
+              let mn = Infinity, mx = -Infinity;
+              for (const v of p) {
+                if (v[k] < mn) mn = v[k];
+                if (v[k] > mx) mx = v[k];
+              }
+              const pl = planes[ax];
+              let lo = 0, hi = pl.length;
+              while (lo < hi) {
+                const m = (lo + hi) >> 1;
+                if (pl[m] <= mn + EPS) lo = m + 1;
+                else hi = m;
+              }
+              if (lo < pl.length && pl[lo] < mx - EPS) {
+                const [a, c] = splitPoly(p, ax, pl[lo]);
+                if (a.length >= 3) stack.push(a);
+                if (c.length >= 3) stack.push(c);
+                cut = true;
+              }
+            }
+            if (!cut) emit(p, i0, i1, i2);
           }
         }
-        if (best >= 0) b.pieces[best].tris.push(mi * TRI_MESH + t);
+      }
+
+      // private copy of this part's triangles; the shared merged mesh loses them
+      const g = new THREE.BufferGeometry();
+      names.forEach((n, a) => g.setAttribute(n, new THREE.BufferAttribute(new Float32Array(outA[a]), srcA[a].itemSize)));
+      const idx = new Uint32Array(nv);
+      for (let i = 0; i < nv; i++) idx[i] = i;
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+      g.computeBoundingSphere();
+      g.computeBoundingBox();
+      const m = new THREE.Mesh(g, src.material);
+      m.name = `${src.name}-woken${b.specId}`;
+      m.userData = src.userData;
+      m.castShadow = src.castShadow;
+      m.receiveShadow = src.receiveShadow;
+      m.renderOrder = src.renderOrder;
+      m.frustumCulled = src.frustumCulled;
+      (src.parent ?? root).add(m);
+      meshList.push(m);
+      const sa = index.array as Uint16Array | Uint32Array;
+      for (const r of ranges) {
+        sa.fill(0, r.start, r.start + r.count);
+        markIndexDirty(src, r.start, r.start + r.count);
       }
     }
   }
@@ -310,7 +435,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   function activate(h: Handle, ps: PieceState): void {
     if (ps.activated) return;
     ps.activated = true;
-    if (!ps.bld.assigned) assignTriangles(ps.bld);
+    if (!ps.bld.assigned) prepareBuilding(ps.bld);
     for (const code of ps.tris) {
       const mi = Math.floor(code / TRI_MESH);
       const t = code - mi * TRI_MESH;
