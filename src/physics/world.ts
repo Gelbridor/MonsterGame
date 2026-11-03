@@ -14,6 +14,7 @@ export async function createPhysics(): Promise<Physics> {
     z: 0,
   });
   world.timestep = config.physics.timestep;
+  const events = new RAPIER.EventQueue(true);
 
   // Reused objects so step()/stats() do not allocate per call.
   const gravity = { x: 0, y: 0, z: 0 };
@@ -33,7 +34,7 @@ export async function createPhysics(): Promise<Physics> {
       gravity.y = -config.physics.gravity * config.physics.gravityScale;
       world.gravity = gravity;
       const t0 = performance.now();
-      world.step();
+      world.step(events);
       stepMs = performance.now() - t0;
     },
 
@@ -46,6 +47,20 @@ export async function createPhysics(): Promise<Physics> {
       result.colliders = world.colliders.len();
       result.stepMs = stepMs;
       return result;
+    },
+
+    removeStaticCollider(collider: RAPIER.Collider): void {
+      const parent = collider.parent();
+      if (parent) world.removeRigidBody(parent);
+      else world.removeCollider(collider, false);
+    },
+
+    drainContactForces(cb): void {
+      events.drainContactForceEvents((e) => {
+        const f = e.totalForce();
+        cb(e.collider1(), e.collider2(), f.x, f.y, f.z, e.totalForceMagnitude());
+      });
+      events.clear();
     },
 
     addStaticBox(center, halfExtents, yaw = 0): RAPIER.Collider {
