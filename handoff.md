@@ -13,7 +13,7 @@ State of the work as of 3 Nov 2026 (evening), written so another agent can pick 
 - **Phase 2 destruction, work in progress** (see below): structural stress solver, debug punch, piece renderer, stats rows and panel sliders.
 - **GPU-aware auto quality**: tier and backend picked from the GPU, dynamic render resolution, automatic one-tier step-down.
 
-Every other branch listed by `git branch` is merged into `main` **except `p2-vis-perf`** (worktree `.claude/worktrees/p2-perf`). A Sonnet agent was working on it when the session ended: it moves the renderer's one-off `prepareBuilding` triangle clipping (the first-punch hitch) ahead of time or spreads it over frames. **Review its result before merging**: its last known commit was `8281d05` ("Merge main"). If it is unfinished, finish the task described under "Next steps" yourself.
+Every branch listed by `git branch` is merged into `main`, including `p2-vis-perf` (renderer `prepareBuilding` is now cheap and time-sliced at 3 ms per frame from wake; renderer share of a destruction call is a few ms).
 
 Leftover worktrees under `.claude/worktrees/` (p2-sim, p2-vis, p2-wire, perf-q, city-r2, two old `agent-*`) are all merged and can be removed with `git worktree remove`.
 
@@ -44,7 +44,7 @@ ThinkPad T480: Intel UHD 620 integrated GPU, 4 cores / 8 threads. Measured by th
 - Visuals (`piece-render.ts`): a woken building keeps its detailed town triangles. On first hand-over its triangles are clipped against the piece-box planes into a private copy, and only a piece's own triangles are hidden when it moves, breaks or is baked. Damage alone does not hand over. Back faces render as a dim interior; interior slabs/columns appear once a building has a hole. Pieces and shards take their building's town variant and tint.
 
 **Known faults and open work, in priority order:**
-1. **First-punch hitch**: in the browser at Low the first punch on a building costs about 200 ms in the call and 40–150 ms in a few following steps (renderer `prepareBuilding` clipping). Being fixed on `p2-vis-perf`.
+1. **First-punch hitch, sim side**: the renderer part is fixed, but in the browser at Low a punch still costs about 75–105 ms in the call (the sim's own wake: `generateBuilding` + `designBonds` cold solve + colliders), and `destruction.fixedUpdate` still spikes 40–250 ms in the first seconds with the renderer share under 0.1 ms (the stress solver or the lazy neighbour wakes). Fix: generate and design every building's graph ahead of time (at load, in idle-time slices, nearest first), so a wake only creates bodies; and check the solver's time budget on the first steps (its speed estimate starts at 3e-4 ms per work unit).
 2. **Slow collapses**: when a tower is punched around its base, or loses one side, it sags over 10+ s instead of falling (resting loose bodies' solves converge slowly within the budget). The `all` case collapses properly.
 3. **Real-hardware cost unmeasured**: harness timings were mostly taken with several headless browsers loading the CPU. Re-run `node scripts/run-harness.cjs t4` (and t5, t8) on an idle machine; check the owner's laptop numbers.
 4. **Low tier still heavy on the UHD 620**: the city's procedural materials run full detail per pixel on Low. Give Low cheaper material variants (`src/city/materials.ts`, gate on `quality.materialDetail`).
@@ -54,7 +54,7 @@ ThinkPad T480: Intel UHD 620 integrated GPU, 4 cores / 8 threads. Measured by th
 
 ## Next steps, in order
 
-1. Review and merge `p2-vis-perf` (or finish it): no single destruction call over about 4 ms at Low in headless Chromium.
+1. Remove the sim-side punch spikes (fault 1): no single destruction call over about 4 ms at Low in headless Chromium.
 2. Fix the slow collapses (item 2 above), then run the Phase 2 gate checks: harness tests 1–4 per tier on an idle machine, and a full tower collapse in the browser.
 3. Cheaper Low-tier materials for integrated GPUs; ask the owner for fps on the T480 afterwards.
 4. Ask the owner to sign off Phase 1 and Phase 2 gates, and to confirm the reconstructed Phase 2–5 roadmap in `plan.md`.
