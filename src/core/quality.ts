@@ -13,7 +13,7 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
     maxActiveChunks: 1500,
     maxParticles: 20000,
     cascadedShadows: true,
-    post: { enabled: true, bloom: true, ao: true, ssr: true, aa: 'traa', filmic: true, effectScale: 1 },
+    post: { enabled: true, bloom: true, ao: true, ssr: true, aa: 'smaa', filmic: true, effectScale: 1 },
     maxDynamicLights: 48,
     rainDrops: 24000,
     materialDetail: 2,
