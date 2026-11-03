@@ -211,7 +211,7 @@ export function createPost(
     const n2 = fract(sin(dot(screenCoordinate.xy.add(fract(time.add(0.37)).mul(61.0)), vec2(39.3468, 11.135))).mul(24634.6345));
     const tri = n1.add(n2).sub(1.0);
     const lumW = float(0.35).add(smoothstep(0.0, 0.5, l).mul(0.65));
-    c = c.add(tri.mul(u.grain.mul(0.5).mul(lumW)).add(tri.mul(1.0 / 255.0)));
+    c = c.add(tri.mul(u.grain.mul(0.36).mul(lumW)).add(tri.mul(1.0 / 255.0)));
     return vec4(c.max(0), 1);
   };
 

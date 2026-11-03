@@ -231,7 +231,6 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
 
   let disposed = false;
 
-  (window as unknown as { __THREE: unknown }).__THREE = THREE; // TEMP-DEBUG
   const ctx: RenderContext = {
     renderer,
     backend,
@@ -266,12 +265,6 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
           });
           csmTuned = true;
         }
-      }
-      const ov = (ctx as unknown as { camOverride?: { pos: number[]; look: number[] } }).camOverride; // TEMP-DEBUG
-      if (ov) {
-        camera.position.set(ov.pos[0], ov.pos[1], ov.pos[2]);
-        camera.lookAt(ov.look[0], ov.look[1], ov.look[2]);
-        camera.updateMatrixWorld();
       }
       try {
         if (post) {
