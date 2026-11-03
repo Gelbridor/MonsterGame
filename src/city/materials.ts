@@ -704,7 +704,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     rough = rough.add(agg.mul(0.1));
     rough = mix(rough, float(0.5), paintAmt.mul(0.9));
     rough = mix(rough, float(0.55), manhole.mul(0.8));
-    rough = mix(rough, float(0.1), puddle.mul(wet.mul(0.6).add(0.4)));
+    rough = mix(rough, float(0.2), puddle.mul(wet.mul(0.6).add(0.4)));
     rough = mix(rough, float(0.78), oneMinus(road));
     ground.roughnessNode = rough;
     ground.metalnessNode = manhole.mul(0.7);
