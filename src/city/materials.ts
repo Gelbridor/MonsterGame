@@ -134,15 +134,21 @@ const puddleField = (p: N, scale: number, off: number, octaves: number): N =>
   mx_fractal_noise_float(vec3(p.x.mul(scale).add(off), p.y.mul(scale).sub(off), float(1.7)), octaves, 2.0, 0.5);
 
 /** Puddle thresholds at full wetness (higher = fewer puddles); see puddleField. */
-const PUDDLE_THR_ROAD = 0.5;
-const PUDDLE_THR_PAVE = 0.5;
-const PUDDLE_THR_PLAZA = 0.36;
+const PUDDLE_THR_ROAD = 0.58;
+const PUDDLE_THR_PAVE = 0.52;
+const PUDDLE_THR_PLAZA = 0.45;
+/** Diffuse colour multiplier inside a puddle: slightly darker than the surrounding wet surface, not black. */
+const PUDDLE_ALBEDO = 0.55;
 /**
  * Specular scale on standing water. A night puddle is a dark mirror: the real sky/horizon haze in the env map
  * would otherwise lift it to pale grey, so the env/analytic specular is cut and only SSR (lamps, windows, signs)
  * supplies bright reflections.
  */
-const PUDDLE_SPECULAR = 0.3;
+/** Wet stone and flagstone (not puddles): lamps skimming the surface at grazing angles otherwise lay a white sheet over the square. */
+const WET_STONE_SPECULAR = 0.15;
+const PUDDLE_SPECULAR = 0.1;
+/** Tarmac puddles sit at grazing angles under lamps, where the sky glow is strongest: keep them dimmer. */
+const PUDDLE_SPECULAR_ROAD = 0.12;
 /** Warm lamp sheen on wet ground: gain and hard cap (linear, pre-tonemap). Night ground sits near 0.01 linear, so even 0.1 here reads as pale grey: keep it faint. */
 const LAMP_SHEEN = 0.08;
 const LAMP_SHEEN_MAX = 0.03;
@@ -706,7 +712,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const kerbness = smoothstep(2.4, 4.8, aAbs);
     const nearGully = oneMinus(smoothstep(0.5, 3.2, abs(gulleyAlong.sub(7.5)))).mul(kerbness);
     const thr = mix(float(0.9), float(PUDDLE_THR_ROAD), wet);
-    const pn = puddleField(p2, 0.32, 7.3, D >= 2 ? 3 : 2).add(kerbness.mul(0.5)).add(nearGully.mul(0.25)).sub(0.2);
+    const pn = puddleField(p2, 0.32, 7.3, D >= 2 ? 3 : 2).add(kerbness.mul(0.65)).add(nearGully.mul(0.3));
     const puddleRaw = smoothstep(thr, thr.add(0.1), pn);
     const puddle: N = puddleRaw.mul(road).mul(oneMinus(paintAmt.mul(0.6))).mul(oneMinus(gulley));
     const dampZone = smoothstep(thr.sub(0.3), thr, pn);
@@ -721,7 +727,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     albedo = mix(albedo, c3(0x050506), gulley.mul(0.9));
     albedo = mix(albedo, c3(0xb5b8b0).mul(0.9), paintAmt);
     albedo = mix(albedo, c3(0xc89a0a).mul(0.85), yellowAmt);
-    albedo = albedo.mul(mix(1.0, 0.8, wet.mul(0.5))).mul(mix(1.0, 0.45, smoothstep(0.0, 0.5, puddle)));
+    albedo = albedo.mul(mix(1.0, 0.8, wet.mul(0.5))).mul(mix(1.0, PUDDLE_ALBEDO, smoothstep(0.0, 0.5, puddle)));
     ground.colorNode = albedo;
 
     // roughness: dry-ish asphalt -> damp -> puddle mirror
@@ -730,11 +736,11 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     rough = rough.add(agg.mul(0.1));
     rough = mix(rough, float(0.5), paintAmt.mul(0.9));
     rough = mix(rough, float(0.55), manhole.mul(0.8));
-    rough = mix(rough, float(0.18), puddle.mul(wet.mul(0.6).add(0.4)));
+    rough = mix(rough, float(0.3), puddle.mul(wet.mul(0.6).add(0.4)));
     rough = mix(rough, float(0.78), oneMinus(road));
     ground.roughnessNode = rough;
     ground.metalnessNode = manhole.mul(0.7);
-    (ground as THREE.MeshPhysicalNodeMaterial).specularIntensityNode = mix(float(1.0), float(PUDDLE_SPECULAR), smoothstep(0.0, 0.5, puddle));
+    (ground as THREE.MeshPhysicalNodeMaterial).specularIntensityNode = mix(float(1.0), float(PUDDLE_SPECULAR_ROAD), smoothstep(0.0, 0.5, puddle));
 
     // --- normals: aggregate micro-bump, ripples in puddles
     let nrm: N;
@@ -778,7 +784,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       nearRoadD(x, roads.roadX[0], roads.roadX[1] - roads.roadX[0], roads.roadX.length),
       nearRoadD(z, roads.roadZ[0], roads.roadZ[1] - roads.roadZ[0], roads.roadZ.length),
     ).sub(roadHalf).max(float(0.0));
-    const kerbSide: N = oneMinus(smoothstep(0.0, cobbles ? 14.0 : 1.6, kerbDist));
+    const kerbSide: N = oneMinus(smoothstep(0.0, cobbles ? 11.0 : 1.6, kerbDist));
     if (!cobbles) {
       const rowH = 0.6;
       const row = floor(z.div(rowH));
@@ -802,7 +808,7 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       topAlbedo = topAlbedo.mul(large.mul(0.45).add(0.8)).mul(vnoise(p2.mul(30.0)).mul(fadeFor(0.03, fp)).mul(0.25).add(0.9));
       topAlbedo = topAlbedo.mul(mix(1.0, 0.36, wet.mul(0.8)));
       const thr = mix(float(0.9), float(PUDDLE_THR_PAVE), wet);
-      const pn = puddleField(p2, 0.5, 2.2, D >= 2 ? 3 : 2).add(kerbSide.mul(0.5)).sub(0.2);
+      const pn = puddleField(p2, 0.5, 2.2, D >= 2 ? 3 : 2).add(kerbSide.mul(0.65));
       puddle = smoothstep(thr, thr.add(0.1), pn).mul(0.85);
       topRough = mix(float(0.85), float(0.5), wet.mul(mix(float(0.7), hc2.mul(0.4).add(0.5), fine))).add(joint.mul(0.1).mul(fine));
       topRelief = joint.mul(-0.006).add(hc.mul(0.002));
@@ -833,7 +839,13 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
       topAlbedo = topAlbedo.mul(mix(1.0, 0.3, wet.mul(0.85)));
       // settled hollows hold water: wide, shallow puddles that break up around stones
       const thr = mix(float(0.9), float(PUDDLE_THR_PLAZA), wet);
-      const pn = puddleField(p2, 0.42, 5.5, D >= 2 ? 3 : 2).add(kerbSide.mul(0.45));
+      // memorial base (centre of the square + (22, -17)) and a few broad dips (very low frequency field) also collect water
+      const sqX = (roads.roadX[1] + roads.roadX[2]) / 2;
+      const sqZ = (roads.roadZ[1] + roads.roadZ[2]) / 2;
+      const memD = length(vec2(x.sub(sqX + 22), z.sub(sqZ - 17)));
+      const memorial = oneMinus(smoothstep(3.0, 9.0, memD));
+      const dips = smoothstep(0.12, 0.5, puddleField(p2, 0.035, 11.0, 2));
+      const pn = puddleField(p2, 0.42, 5.5, D >= 2 ? 3 : 2).add(kerbSide.mul(0.75)).add(memorial.mul(0.5)).add(dips.mul(0.35));
       puddle = smoothstep(thr, thr.add(0.1), pn);
       topRough = mix(float(0.8), float(0.5), wet.mul(mix(float(0.7), hc2.mul(0.5).add(0.5), fine)));
       topRelief = joint.mul(-0.012).add(hc.mul(0.01)).mul(fine);
@@ -845,10 +857,10 @@ export function createCityMaterials(quality: QualityPreset, roads: RoadInfo): Ci
     const aSide = mix(kerb, topAlbedo, isTop);
     // standing water has almost no diffuse: darken ahead of the roughness change so the outline never shows a pale rim
     const puddleDark = smoothstep(0.0, 0.5, puddle).mul(isTop);
-    m.colorNode = mix(aSide, aSide.mul(0.3), puddleDark);
-    m.roughnessNode = mix(mix(float(0.55), topRough, isTop), float(0.16), puddle.mul(isTop).mul(wet.mul(0.5).add(0.5)));
+    m.colorNode = mix(aSide, aSide.mul(PUDDLE_ALBEDO), puddleDark);
+    m.roughnessNode = mix(mix(float(0.55), topRough, isTop), float(0.4), puddle.mul(isTop).mul(wet.mul(0.5).add(0.5)));
     m.metalnessNode = float(0.0);
-    (m as THREE.MeshPhysicalNodeMaterial).specularIntensityNode = mix(float(1.0), float(PUDDLE_SPECULAR), puddleDark);
+    (m as THREE.MeshPhysicalNodeMaterial).specularIntensityNode = mix(float(WET_STONE_SPECULAR), float(PUDDLE_SPECULAR), puddleDark);
     if (D >= 2) {
       const bumpN = bumpNormal(topRelief.mul(oneMinus(puddle)).mul(isTop), float(1.0));
       const rr: N = rainRipples(p2, rain);
