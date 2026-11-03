@@ -74,6 +74,33 @@ export const config = {
     fogDensity: 0.0028,
     /** Tone mapping exposure. */
     exposure: 1.0,
+    /** Moon light intensity. */
+    moonIntensity: 2.2,
+    /** Sky / ambient fill intensity. */
+    ambientIntensity: 1.0,
+    /** Environment-map reflection strength on PBR materials. */
+    envIntensity: 1.0,
+    bloomStrength: 0.9,
+    bloomRadius: 0.55,
+    bloomThreshold: 0.85,
+    aoIntensity: 1.0,
+    aoRadius: 4.0,
+    ssrStrength: 0.8,
+    filmGrain: 0.06,
+    vignette: 0.35,
+    chromaticAberration: 0.0015,
+    saturation: 1.05,
+    contrast: 1.05,
+  },
+
+  weather: {
+    /** Rain amount 0..1 (0 = dry). Rain is on by default per the plan. */
+    rain: 1.0,
+    /** Wind push on rain (m/s, x and z). */
+    windX: 2.0,
+    windZ: 1.0,
+    /** How wet the streets look 0..1 (puddles, reflections). */
+    wetness: 0.85,
   },
 
   input: {

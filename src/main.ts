@@ -14,6 +14,10 @@ import { buildTown } from './city/town-layout';
 import { createBasalt } from './monster/basalt';
 import { createFollowCamera } from './camera/follow-camera';
 import { createDebugUI } from './debug/panel';
+import { createRain } from './render/effects/rain';
+import { createSplashes } from './render/effects/splashes';
+import { createLightCones } from './render/effects/light-cones';
+import { setWeatherLamps } from './render/effects/weather-common';
 import type { FrameStats, InputSnapshot } from './core/types';
 
 const loadingEl = document.getElementById('loading')!;
@@ -39,15 +43,21 @@ async function start() {
     });
   }
 
-  const town = buildTown(ctx.scene, physics);
+  const town = buildTown(ctx.scene, physics, quality);
   town.group.traverse((o) => {
     const kind = o.userData.kind;
     if (kind === 'ground') applyShadowFlags(o, 'ground', quality);
     else if (kind === 'building') applyShadowFlags(o, 'city', quality);
   });
 
-  const basalt = createBasalt(ctx.scene, physics, town.spawn);
+  const basalt = createBasalt(ctx.scene, physics, town.spawn, quality);
   applyShadowFlags(basalt.object, 'monster', quality);
+
+  // Weather: rain and splashes are lit by the town's lamps; cones hang under them.
+  setWeatherLamps(town.lampPositions, town.lampColors);
+  const rain = createRain(ctx.scene, ctx.camera, quality);
+  const splashes = createSplashes(ctx.scene, ctx.camera, quality);
+  const cones = createLightCones(ctx.scene, town.lampPositions, town.lampColors, quality);
 
   const followCam = createFollowCamera(ctx.camera);
   const input = createInput(container);
@@ -95,6 +105,10 @@ async function start() {
       const speed = Math.hypot(basalt.velocity.x, basalt.velocity.z);
       followCam.update(frameDt, visualPos, snapshot, basalt.heading, speed);
 
+      rain.update(frameDt);
+      splashes.update(frameDt);
+      cones.update(frameDt, ctx.camera);
+
       ctx.setShadowFocus(visualPos);
       ctx.render();
 
@@ -127,7 +141,7 @@ async function start() {
   });
 
   // Handy from the browser console while tuning.
-  Object.assign(window as unknown as Record<string, unknown>, { mb: { config, ctx, physics, basalt, town } });
+  Object.assign(window as unknown as Record<string, unknown>, { mb: { config, ctx, physics, basalt, town, rain, splashes, cones } });
   console.info(
     `[Monster Brawl] ${ctx.backend.toUpperCase()} · quality ${quality.level} · ${town.buildingCount} buildings`,
   );

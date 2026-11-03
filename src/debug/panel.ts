@@ -62,6 +62,25 @@ const META: Record<string, Meta> = {
   'render.maxPixelRatio': { min: 0.5, max: 3, step: 0.05 },
   'render.fogDensity': { min: 0, max: 0.02, step: 0.0001 },
   'render.exposure': { min: 0.1, max: 4, step: 0.01 },
+  'render.moonIntensity': { min: 0, max: 10, step: 0.05 },
+  'render.ambientIntensity': { min: 0, max: 4, step: 0.01 },
+  'render.envIntensity': { min: 0, max: 4, step: 0.01 },
+  'render.bloomStrength': { min: 0, max: 3, step: 0.01 },
+  'render.bloomRadius': { min: 0, max: 1, step: 0.01 },
+  'render.bloomThreshold': { min: 0, max: 4, step: 0.01 },
+  'render.aoIntensity': { min: 0, max: 3, step: 0.01 },
+  'render.aoRadius': { min: 0.25, max: 16, step: 0.05 },
+  'render.ssrStrength': { min: 0, max: 1, step: 0.01 },
+  'render.filmGrain': { min: 0, max: 0.3, step: 0.005 },
+  'render.vignette': { min: 0, max: 1, step: 0.01 },
+  'render.chromaticAberration': { min: 0, max: 0.01, step: 0.0001 },
+  'render.saturation': { min: 0, max: 2, step: 0.01 },
+  'render.contrast': { min: 0.5, max: 1.5, step: 0.01 },
+
+  'weather.rain': { min: 0, max: 1, step: 0.01 },
+  'weather.windX': { min: -15, max: 15, step: 0.1 },
+  'weather.windZ': { min: -15, max: 15, step: 0.1 },
+  'weather.wetness': { min: 0, max: 1, step: 0.01 },
 
   'input.deadZone': { min: 0, max: 0.6, step: 0.01 },
   'input.touchStickRadius': { min: 30, max: 140, step: 1 },
@@ -77,7 +96,7 @@ const RESTART_REQUIRED = new Set<string>([
 ]);
 
 /** Folders left open on first show. */
-const OPEN_FOLDERS = new Set<string>(['monster', 'debug']);
+const OPEN_FOLDERS = new Set<string>(['render', 'weather', 'debug']);
 
 const RESTART_MARK = ' ⟳';
 

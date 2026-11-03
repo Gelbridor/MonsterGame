@@ -20,6 +20,33 @@ export interface QualityPreset {
   /** Plan budgets (used from Phase 2). */
   maxActiveChunks: number;
   maxParticles: number;
+
+  // ---- graphics features (all scale down for phones)
+  /** Cascaded shadow maps for the moon (else a single shadow map). */
+  cascadedShadows: boolean;
+  /** Post-processing chain. `enabled: false` = render straight to screen. */
+  post: {
+    enabled: boolean;
+    bloom: boolean;
+    /** Ground-truth ambient occlusion. */
+    ao: boolean;
+    /** Screen-space reflections (wet streets). */
+    ssr: boolean;
+    /** Anti-aliasing applied in post: temporal (TRAA), SMAA, FXAA or none. */
+    aa: 'traa' | 'smaa' | 'fxaa' | 'none';
+    /** Film grain, vignette, chromatic fringe and colour grade. */
+    filmic: boolean;
+    /** Internal resolution scale for expensive passes (AO / SSR), 0.25..1. */
+    effectScale: number;
+  };
+  /** Number of real (shading) street/fire point lights allowed; others are emissive-only. */
+  maxDynamicLights: number;
+  /** Rain streak count (0 = no rain). */
+  rainDrops: number;
+  /** Procedural material detail: 0 = flat colours, 1 = basic noise, 2 = full (normals, wetness, puddles, interiors). */
+  materialDetail: 0 | 1 | 2;
+  /** Geometric detail on buildings and Basalt: 0 = boxes, 1 = medium, 2 = full. */
+  geometryDetail: 0 | 1 | 2;
 }
 
 // ---------------------------------------------------------------- renderer
