@@ -114,7 +114,41 @@ interface Handle {
   tintB: number;
   damage: number;
   isShard: boolean;
+  /** Progressive-wake state: the piece is hidden (the town's own mesh shows) until it moves, is damaged or is removed. */
+  pc: PieceState | null;
 }
+
+/** One piece of a woken building whose merged town triangles are handed over piece by piece. */
+interface PieceState {
+  bld: WokenBuilding;
+  handle: number;
+  activated: boolean;
+  /** Rest pose (world): px py pz, qx qy qz qw. */
+  rest: Float64Array;
+  /** Rest box in building-local space: centre then half extents. */
+  box: Float64Array;
+  /** Town triangles that belong to this piece (meshIdx * TRI_MESH + index offset), filled lazily. */
+  tris: number[];
+}
+
+interface WokenBuilding {
+  specId: number;
+  x: number;
+  z: number;
+  cs: number;
+  sn: number;
+  pieces: PieceState[];
+  assigned: boolean;
+}
+
+/** Index offsets stay below this inside one merged mesh. */
+const TRI_MESH = 67108864;
+/** Pose deviation that counts as 'moved' (metres, quaternion component), and damage that shows cracks. */
+const MOVE_EPS = 0.03;
+const ROT_EPS = 0.004;
+const SHOW_DAMAGE = 0.12;
+/** A town triangle farther than this from every piece box is detail the piece grid does not cover: it stays. */
+const ASSIGN_MAX = 2.5;
 
 // ---------------------------------------------------------------- rubble
 
@@ -188,8 +222,22 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     }
   }
   const hidden = new Set<number>();
+  /** Buildings the sim woke (hideBuilding) that have not had pieces added: fully hidden at the next update. */
+  const pendingWake = new Set<number>();
+  const woken = new Map<number, WokenBuilding>();
+  const meshList: THREE.Mesh[] = [];
+  const meshDirty = new Map<THREE.Mesh, [number, number]>();
 
-  function hideBuilding(specId: number): void {
+  function markIndexDirty(mesh: THREE.Mesh, lo: number, hi: number): void {
+    const d = meshDirty.get(mesh);
+    if (!d) meshDirty.set(mesh, [lo, hi]);
+    else {
+      if (lo < d[0]) d[0] = lo;
+      if (hi > d[1]) d[1] = hi;
+    }
+  }
+
+  function hideAll(specId: number): void {
     if (hidden.has(specId)) return;
     hidden.add(specId);
     const list = rangesByBuilding.get(specId);
@@ -198,9 +246,89 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
       const index = r.mesh.geometry.index;
       if (!index) continue;
       (index.array as Uint16Array | Uint32Array).fill(0, r.start, r.start + r.count);
+      index.clearUpdateRanges();
       index.addUpdateRange(r.start, r.count);
       index.needsUpdate = true;
     }
+  }
+
+  /**
+   * The sim woke a building. Its merged town visuals stay (so a woken building looks exactly like the
+   * intact one) and are handed over triangle by triangle as pieces move, take damage or break; the
+   * pieces themselves are invisible until then. If no pieces are added the building is hidden whole.
+   */
+  function hideBuilding(specId: number): void {
+    if (hidden.has(specId) || woken.has(specId)) return;
+    pendingWake.add(specId);
+  }
+
+  function assignTriangles(b: WokenBuilding): void {
+    b.assigned = true;
+    const list = rangesByBuilding.get(b.specId);
+    if (!list) return;
+    const np = b.pieces.length;
+    const bx = new Float64Array(np * 6);
+    for (let i = 0; i < np; i++) if (b.pieces[i]) bx.set(b.pieces[i].box, i * 6);
+    for (const r of list) {
+      const geo = r.mesh.geometry;
+      const index = geo.index;
+      const pos = geo.getAttribute('position') as THREE.BufferAttribute | undefined;
+      if (!index || !pos) continue;
+      let mi = meshList.indexOf(r.mesh);
+      if (mi < 0) mi = meshList.push(r.mesh) - 1;
+      const ia = index.array;
+      const pa = pos.array as Float32Array;
+      for (let t = r.start; t < r.start + r.count; t += 3) {
+        const i0 = ia[t] * 3, i1 = ia[t + 1] * 3, i2 = ia[t + 2] * 3;
+        if (i0 === i1 && i1 === i2) continue;
+        const wx = (pa[i0] + pa[i1] + pa[i2]) / 3 - b.x;
+        const wy = (pa[i0 + 1] + pa[i1 + 1] + pa[i2 + 1]) / 3;
+        const wz = (pa[i0 + 2] + pa[i1 + 2] + pa[i2 + 2]) / 3 - b.z;
+        const lx = b.cs * wx - b.sn * wz, lz = b.sn * wx + b.cs * wz;
+        let best = -1, bd = ASSIGN_MAX, bv = Infinity;
+        for (let i = 0; i < np; i++) {
+          const o = i * 6;
+          if (bx[o + 3] === 0 && bx[o + 4] === 0) continue;
+          const dx = Math.max(0, Math.abs(lx - bx[o]) - bx[o + 3]);
+          const dy = Math.max(0, Math.abs(wy - bx[o + 1]) - bx[o + 4]);
+          const dz = Math.max(0, Math.abs(lz - bx[o + 2]) - bx[o + 5]);
+          const d = Math.hypot(dx, dy, dz);
+          if (d > bd + 1e-6) continue;
+          const vol = bx[o + 3] * bx[o + 4] * bx[o + 5];
+          if (d < bd - 1e-6 || vol < bv) {
+            bd = d;
+            bv = vol;
+            best = i;
+          }
+        }
+        if (best >= 0) b.pieces[best].tris.push(mi * TRI_MESH + t);
+      }
+    }
+  }
+
+  /** The piece now draws itself: remove its share of the town's merged triangles. */
+  function activate(h: Handle, ps: PieceState): void {
+    if (ps.activated) return;
+    ps.activated = true;
+    if (!ps.bld.assigned) assignTriangles(ps.bld);
+    for (const code of ps.tris) {
+      const mi = Math.floor(code / TRI_MESH);
+      const t = code - mi * TRI_MESH;
+      const mesh = meshList[mi];
+      (mesh.geometry.index!.array as Uint16Array | Uint32Array).fill(0, t, t + 3);
+      markIndexDirty(mesh, t, t + 3);
+    }
+    ps.tris.length = 0;
+    if (h.batch) h.batch.mesh.setVisibleAt(h.inst, true);
+  }
+
+  function showRest(id: number, h: Handle, ps: PieceState): void {
+    const o = id * 7;
+    scratchP.set(tr[o], tr[o + 1], tr[o + 2]);
+    scratchQ.set(tr[o + 3], tr[o + 4], tr[o + 5], tr[o + 6]);
+    scratchM.compose(scratchP, scratchQ, scratchS);
+    h.batch!.mesh.setMatrixAt(h.inst, scratchM);
+    activate(h, ps);
   }
 
   // ------------------------------------------------ batches
@@ -245,7 +373,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     tr = n;
   }
 
-  function create(look: Look, data: GeoData, tint: number, isShard: boolean): RenderHandle {
+  function create(look: Look, data: GeoData, tint: number, isShard: boolean, pc: PieceState | null = null): RenderHandle {
     const bg = geoBuffer(data);
     const iCount = data.idx.length;
     const b = batchFor(look, data.vCount, iCount);
@@ -258,7 +386,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     b.iLive += iCount;
     let id = freeIds.pop();
     const h: Handle = {
-      alive: true, look, batch: b, geoId, inst, data, tintR: tint, tintG: tint, tintB: tint, damage: 0, isShard,
+      alive: true, look, batch: b, geoId, inst, data, tintR: tint, tintG: tint, tintB: tint, damage: 0, isShard, pc,
     };
     if (id === undefined) {
       id = handles.length;
@@ -272,6 +400,11 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     b.mesh.setMatrixAt(inst, scratchM);
     scratchC.set(tint, tint, tint, 0);
     b.mesh.setColorAt(inst, scratchC);
+    if (pc) {
+      pc.handle = id;
+      b.mesh.setVisibleAt(inst, false);
+      tr.set(pc.rest, o);
+    }
     liveHandles++;
     if (isShard) liveShards++;
     return id;
@@ -334,10 +467,31 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
 
   const tintOf = (piece: PieceDef): number => 0.88 + (((piece.seed * 40503) >>> 0) % 1000) / 1000 * 0.2;
 
-  function addPiece(_graph: BuildingGraph, piece: PieceDef): RenderHandle {
+  function addPiece(graph: BuildingGraph, piece: PieceDef): RenderHandle {
     const e = piece.halfExtents;
     const data = buildGeoData(boxGeo(e[0], e[1], e[2]), piece);
-    return create(lookFor(piece.material, piece.kind), data, tintOf(piece), false);
+    let pc: PieceState | null = null;
+    if (pendingWake.has(graph.specId) || woken.has(graph.specId)) {
+      let b = woken.get(graph.specId);
+      if (!b) {
+        pendingWake.delete(graph.specId);
+        b = { specId: graph.specId, x: graph.x, z: graph.z, cs: Math.cos(graph.yaw), sn: Math.sin(graph.yaw), pieces: [], assigned: false };
+        woken.set(graph.specId, b);
+      }
+      const c = piece.center;
+      const half = graph.yaw * 0.5;
+      pc = {
+        bld: b, handle: -1, activated: false,
+        rest: Float64Array.of(
+          graph.x + b.cs * c[0] + b.sn * c[2], c[1], graph.z - b.sn * c[0] + b.cs * c[2],
+          0, Math.sin(half), 0, Math.cos(half),
+        ),
+        box: Float64Array.of(c[0], c[1], c[2], e[0], e[1], e[2]),
+        tris: [],
+      };
+      b.pieces[piece.index] = pc;
+    }
+    return create(lookFor(piece.material, piece.kind), data, tintOf(piece), false, pc);
   }
 
   function addShard(piece: PieceDef, fr: FractureResult, shardIndex: number): RenderHandle {
@@ -362,6 +516,14 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     const o = h * 7;
     tr[o] = pos.x; tr[o + 1] = pos.y; tr[o + 2] = pos.z;
     tr[o + 3] = quat.x; tr[o + 4] = quat.y; tr[o + 5] = quat.z; tr[o + 6] = quat.w;
+    const ps = hd.pc;
+    if (ps && !ps.activated) {
+      const r = ps.rest;
+      const dq = Math.abs(quat.x - r[3]) + Math.abs(quat.y - r[4]) + Math.abs(quat.z - r[5]) + Math.abs(quat.w - r[6]);
+      const dqn = Math.abs(quat.x + r[3]) + Math.abs(quat.y + r[4]) + Math.abs(quat.z + r[5]) + Math.abs(quat.w + r[6]);
+      if (Math.abs(pos.x - r[0]) + Math.abs(pos.y - r[1]) + Math.abs(pos.z - r[2]) < MOVE_EPS && Math.min(dq, dqn) < ROT_EPS) return;
+      activate(hd, ps); // moved: the matrix below applies
+    }
     scratchP.set(pos.x, pos.y, pos.z);
     scratchQ.set(quat.x, quat.y, quat.z, quat.w);
     scratchM.compose(scratchP, scratchQ, scratchS);
@@ -377,12 +539,14 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     hd.damage = d;
     scratchC.set(hd.tintR, hd.tintG, hd.tintB, d);
     hd.batch.mesh.setColorAt(hd.inst, scratchC);
+    if (hd.pc && !hd.pc.activated && d > SHOW_DAMAGE) showRest(h, hd, hd.pc);
   }
 
   function remove(h: RenderHandle): void {
     if (h < 0) return;
     const hd = handles[h];
     if (!hd || !hd.alive) return;
+    if (hd.pc && !hd.pc.activated) activate(hd, hd.pc); // its shards replace it: the town's triangles go
     release(h, hd);
   }
 
@@ -440,6 +604,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
       if (id < 0) continue;
       const hd = handles[id];
       if (!hd || !hd.alive || !hd.data) continue;
+      if (hd.pc && !hd.pc.activated) activate(hd, hd.pc);
       const d = hd.data;
       const c = chunkFor(hd.look, d.vCount, d.idx.length);
       const o = id * 7;
@@ -475,6 +640,17 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   // ------------------------------------------------ per-frame
 
   function update(): void {
+    if (pendingWake.size > 0) {
+      for (const id of pendingWake) hideAll(id);
+      pendingWake.clear();
+    }
+    for (const [mesh, d] of meshDirty) {
+      const index = mesh.geometry.index!;
+      index.clearUpdateRanges();
+      index.addUpdateRange(d[0], d[1] - d[0]);
+      index.needsUpdate = true;
+    }
+    meshDirty.clear();
     for (const c of dirty) {
       const g = c.mesh.geometry;
       for (const name of ['position', 'normal', 'plocal', 'pn', 'rtint']) {
