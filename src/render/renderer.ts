@@ -21,8 +21,8 @@ const SHADOW_DISTANCE = 220;
 /** Far edge (m) of the cascaded moon shadows. */
 const CSM_FAR = 400;
 /** Light units per config.render.moonIntensity / ambientIntensity. */
-const MOON_GAIN = 1.5;
-const HEMI_GAIN = 0.14;
+const MOON_GAIN = 0.7;
+const HEMI_GAIN = 0.05;
 
 function wantsForcedWebGL(): boolean {
   const params = new URLSearchParams(window.location.search);
@@ -145,7 +145,8 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
   if (shadowsOn) {
     sun.castShadow = true;
     sun.shadow.mapSize.set(quality.shadowMapSize, quality.shadowMapSize);
-    sun.shadow.radius = 2.5;
+    sun.shadow.radius = 4;
+    sun.shadow.intensity = 0.55; // overcast: shadows keep ~45% of the moon light
     const cam = sun.shadow.camera;
     if (quality.cascadedShadows) {
       cam.near = 1;
@@ -242,7 +243,7 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
       if (disposed) return;
       // Re-read tunables so the debug panel can change them live.
       renderer.toneMappingExposure = config.render.exposure;
-      scene.environmentIntensity = config.render.envIntensity;
+      scene.environmentIntensity = config.render.envIntensity * 0.5;
       hemi.intensity = config.render.ambientIntensity * HEMI_GAIN;
       sun.intensity = config.render.moonIntensity * MOON_GAIN;
       sky.update();
@@ -261,7 +262,8 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
           csm.lights.forEach((l, i) => {
             l.shadow!.normalBias = 0.1 + i * 0.09;
             l.shadow!.bias = -0.00025 * (i + 1);
-            l.shadow!.radius = 2.5;
+            l.shadow!.radius = 4;
+            l.shadow!.intensity = 0.55;
           });
           csmTuned = true;
         }

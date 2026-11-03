@@ -29,7 +29,7 @@ export const MOON_DIR = new THREE.Vector3(-0.62, 0.5, -0.6).normalize();
 const MOON_COLOR = new THREE.Color(0.62, 0.74, 1.0);
 
 /** Warm light-pollution tint at the horizon (linear). Also the base of the fog colour. */
-const HORIZON = new THREE.Color(0.075, 0.034, 0.015);
+const HORIZON = new THREE.Color(0.017, 0.023, 0.038);
 
 // Dave Hoskins hash: float from vec3, no sin().
 const hash13 = Fn(([p]: N[]) => {
@@ -69,9 +69,11 @@ export function createSky(quality: QualityPreset): Sky {
   const fogColor = Fn(([dir]: N[]) => {
     const up = max(dir.y, 0);
     // Warm at the horizon, cooling towards the zenith.
-    const cool = vec3(0.009, 0.014, 0.03);
+    const cool = vec3(0.005, 0.009, 0.022);
     const t = pow(smoothstep(0.0, 0.55, up), 0.65);
-    return mix(horizonCol, cool, t);
+    // Thin low sodium band right at the horizon only.
+    const warm = vec3(0.05, 0.026, 0.011).mul(exp(abs(dir.y).mul(-38.0)));
+    return mix(horizonCol, cool, t).add(warm);
   });
 
   /**
@@ -88,7 +90,7 @@ export function createSky(quality: QualityPreset): Sky {
       // Broad warm skyglow, a little uneven so the horizon is not a perfect ring.
       const azimuth = vec3(dir.x, dir.z, 0.0).mul(2.3);
       const uneven = mx_noise_float(azimuth).mul(0.25).add(1.0);
-      base.addAssign(vec3(0.17, 0.075, 0.03).mul(exp(up.mul(-3.0))).mul(uneven).mul(0.16));
+      base.addAssign(vec3(0.17, 0.075, 0.03).mul(exp(up.mul(-14.0))).mul(uneven).mul(0.1));
 
       const col = base.toVar();
       const cloudDensity = float(0).toVar();
@@ -131,7 +133,7 @@ export function createSky(quality: QualityPreset): Sky {
       const silver = pow(moonCos, 8.0).mul(0.22).add(pow(moonCos, 60.0).mul(0.9));
       const thin = float(1).sub(core.mul(0.75));
 
-      const cloudBase = mix(vec3(0.016, 0.024, 0.05), horizonCol.mul(0.75), exp(up.mul(-3.0)));
+      const cloudBase = mix(vec3(0.014, 0.021, 0.045), vec3(0.05, 0.058, 0.08), exp(up.mul(-5.0)));
       const cloudCol = cloudBase.mul(float(1).sub(core.mul(0.45)))
         .add(moonCol.mul(silver).mul(thin).mul(0.55));
 
@@ -141,7 +143,7 @@ export function createSky(quality: QualityPreset): Sky {
 
       // Fade into the fog colour at the horizon so the two always meet.
       const horizonBlend = smoothstep(0.0, 0.1, dir.y);
-      col.assign(mix(fogColor(vec3(dir.x, 0.0, dir.z)), col, horizonBlend));
+      col.assign(mix(fogColor(dir), col, horizonBlend));
 
       if (env) {
         // Below the horizon: dark, warm, wet ground.
