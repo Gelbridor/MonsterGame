@@ -316,10 +316,27 @@ async function t5(): Promise<void> {
   }
 }
 
+async function t6(): Promise<void> {
+  // replay a punch at a world point: PUNCH=x,y,z LEVEL=low
+  const env = await setup((process.env.LEVEL as QualityLevel) || 'low');
+  const [x, y, z] = (process.env.PUNCH || '-5,8,-59.5').split(',').map(Number);
+  env.d.applyDamage({ shape: { kind: 'sphere', center: { x, y, z }, radius: config.destruction.punchRadius }, damage: config.destruction.punchDamage, impulse: config.destruction.punchImpulse, direction: { x: 0, y: 0, z: -1 } });
+  for (const b of env.d.sim.buildings.values()) {
+    const g = b.graph;
+    const dead: string[] = [];
+    for (let i = 0; i < g.pieces.length; i++) if (!b.alive[i]) dead.push(`${g.pieces[i].kind}/${g.pieces[i].material}`);
+    const s = b.spec;
+    console.log(`woke ${s.type} ${s.id} at (${fmt(s.x)}, ${fmt(s.z)}) ${fmt(s.width)}x${fmt(s.depth)}x${fmt(s.height)} yaw ${fmt(s.yaw, 2)}: ${g.pieces.length}p/${g.bonds.length}b, destroyed ${dead.length}: ${dead.join(' ')}`);
+  }
+  stepN(env, 120);
+  console.log(`after 2 s: chunks ${env.d.stats().activeChunks}, rubble ${env.d.stats().rubbleBodies}, bonds ${env.d.stats().liveBonds}`);
+}
+
 const which = process.argv[2] ?? 'all';
 (async () => {
   if (which === 't0') await t0();
   if (which === 't5') await t5();
+  if (which === 't6') await t6();
   if (which === 't1' || which === 'all') await t1();
   if (which === 't2' || which === 'all') await t2();
   if (which === 't3' || which === 'all') await t3();
