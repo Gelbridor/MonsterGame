@@ -188,7 +188,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
       taper: o.taper,
       lava: o.lava,
       crack: o.crack ?? 1.2,
-      coreLava: o.coreLava ?? 0.5,
+      coreLava: o.coreLava ?? 0.22,
       lenVar: o.lenVar ?? 0.2,
       tint: o.tint,
     });
@@ -212,7 +212,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
   }
 
   // ================================================================ SPINE (belly)
-  rock('spine', 2, [0, 0.1, -0.5], [4.4, 3.4, 4.0], {}, { amp: 0.18 });
+  rock('spine', 2, [0, 0.1, -0.5], [4.4, 3.4, 4.0], { crack: 2.0 }, { amp: 0.18 });
   // Segmented belly plates with lava between them.
   for (let i = 0; i < 3; i++) {
     const y = -1.4 + i * 1.45;
@@ -230,13 +230,15 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
   }
 
   // ================================================================ CHEST
-  rock('chest', 2, [0, 1.4, -0.2], [6.7, 5.2, 5.0], {}, { amp: 0.17 });
-  rock('chest', 2, [0, 4.2, 1.2], [5.6, 3.0, 3.7], {}, { amp: 0.2 });
+  rock('chest', 2, [0, 1.4, -0.2], [6.7, 5.2, 5.0], { crack: 1.3 }, { amp: 0.17 });
+  rock('chest', 2, [0, 4.2, 1.2], [5.6, 3.0, 3.7], { crack: 2.4 }, { amp: 0.2 });
+  // Molten seam running down the spine between the column bundles.
+  plate('chest', [0, 2.8, 3.1], [1.1, 6.5, 0.9], [0.35, 0, 0], { lava: 0.85, crack: 0 }, 0.05);
   rock('chest', 1, [4.7, 0.9, 0.0], [2.8, 3.4, 3.4]);
   rock('chest', 1, [-4.7, 0.9, 0.0], [2.8, 3.4, 3.4]);
   // Pecs: broad plates, riddled with cracks, framing the core.
-  rock('chest', 2, [3.0, 1.7, -3.5], [3.5, 3.0, 2.4], { crack: 2.2 }, { amp: 0.2, squarish: 0.3 });
-  rock('chest', 2, [-3.0, 1.7, -3.5], [3.5, 3.0, 2.4], { crack: 2.2 }, { amp: 0.2, squarish: 0.3 });
+  rock('chest', 2, [3.0, 1.7, -3.5], [3.5, 3.0, 2.4], { crack: 1.5 }, { amp: 0.2, squarish: 0.3 });
+  rock('chest', 2, [-3.0, 1.7, -3.5], [3.5, 3.0, 2.4], { crack: 1.5 }, { amp: 0.2, squarish: 0.3 });
   // The lava core, seen between the pecs, with a glowing heart-pit above and below.
   rock('chest', 1, [0, 1.1, -4.15], [1.8, 2.5, 1.1], { lava: 1.05, crack: 0, tint: 0.5 }, { amp: 0.14 });
   rock('chest', 0, [0, -1.4, -4.1], [1.2, 0.7, 0.8], { lava: 0.8, crack: 0 }, { amp: 0.1 });
@@ -248,7 +250,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
   }
   collar('chest', [0, 5.7, -2.2], [3.2, 0.75, 2.6], 0.75);
   // Great back-spine: the tallest basalt columns.
-  bundle('chest', [0, 4.3, 1.6], [0, 0.88, 0.48], 3.0, 10.5, 2, { taper: 0.72, crack: 1.4, lenVar: 0.45, coreLava: 0.6 });
+  bundle('chest', [0, 4.3, 1.6], [0, 0.88, 0.48], 3.0, 10.5, 2, { taper: 0.72, crack: 1.8, lenVar: 0.45, coreLava: 0.4, lava: 0.1 });
   bundle('chest', [3.4, 4.1, 1.2], [0.32, 0.9, 0.3], 2.2, 7.8, 1, { taper: 0.7, crack: 1.4, lenVar: 0.4 });
   bundle('chest', [-3.4, 4.1, 1.2], [-0.32, 0.9, 0.3], 2.2, 8.4, 1, { taper: 0.7, crack: 1.4, lenVar: 0.4 });
   const nBack = Math.round(7 * richness);
@@ -295,7 +297,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
     claw('head', [x, -1.45, -3.85 + Math.abs(x) * 0.5], [Math.PI, 0, 0], 0.17, 0.75 + (i % 2) * 0.25, { tint: 2.2 });
   }
   // Crest: three tall columns sweeping back from the crown.
-  bundle('head', [0, 1.9, 0.9], [0, 0.55, 0.85], 1.5, 4.2, 1, { taper: 0.65, crack: 1.4 });
+  bundle('head', [0, 1.9, 0.9], [0, 0.55, 0.85], 1.5, 4.2, 1, { taper: 0.65, crack: 0.3, coreLava: 0.0 });
   col('head', [1.2, 1.5, 0.2], [0.8, 0, -0.4], 0.5, 2.8, {}, { tip: 0.6 });
   col('head', [-1.2, 1.5, 0.2], [0.8, 0, 0.4], 0.5, 2.8, {}, { tip: 0.6 });
 
@@ -385,7 +387,7 @@ export function createBasaltRig(quality: QualityPreset): BasaltRig {
   }
 
   // ================================================================ TAIL
-  const tailR = [2.4, 1.95, 1.5, 1.05];
+  const tailR = [2.7, 2.2, 1.7, 1.2];
   const tailLen = [3.8, 3.5, 3.1, 3.0];
   const tailBones: BoneName[] = ['tail1', 'tail2', 'tail3', 'tail4'];
   tailBones.forEach((b, i) => {

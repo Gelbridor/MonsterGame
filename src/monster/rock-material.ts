@@ -180,7 +180,7 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   let ramp: N = mix(c0, c1, smoothstep(0.0, 0.35, h));
   ramp = mix(ramp, c2, smoothstep(0.35, 0.7, h));
   ramp = mix(ramp, c3, smoothstep(0.72, 1.0, h));
-  const intensity = mix(0.15, 6.5, pow(h, 1.35));
+  const intensity = mix(0.0, 6.5, pow(h, 1.2)).add(h.mul(0.3));
   const lavaEmissive = ramp.mul(intensity).mul(pulse);
   const bleedEmissive = c0.mul(1.1).mul(bleed).mul(float(1).sub(h)).mul(pulse).mul(float(0.7).add(flow.mul(0.6)));
 
