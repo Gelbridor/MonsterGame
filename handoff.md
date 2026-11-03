@@ -5,6 +5,31 @@ State of the work as of 3 Nov 2026, written so another agent can pick it up cold
 - **Design:** read [`plan.md`](plan.md) first. Its **Milestones** table defines each phase and its gate.
 - **Look:** see the reference screenshots in [`docs/screenshots/`](docs/screenshots/).
 
+## Latest session (3 Nov 2026, afternoon): read this first
+
+This session's work is in **local branches only, not pushed**. The sections below this one describe the state before it.
+
+| Branch | State |
+| --- | --- |
+| `graphics-polish` | From `main`. Reviewed merges of the Basalt polish (lava contrast, visible head, planted feet measured slide-free: walking skid 10.7 cm → 0 cm) and city polish round 1 (no frost sheen, smooth puddles, footprint-filtered setts). **Not yet on `main`.** |
+| `worktree-agent-a96c3546a9ac30ae6` | City polish **round 2**, in progress: GTAO blotches on the plaza at high/ultra (root cause in `src/render/post.ts`), and puddles to be concentrated at kerbs and dips and made dark mirrors rather than black tar. |
+| `phase-2-destruction` | From `graphics-polish`. Holds the Phase 2 contracts in `src/destruction/types.ts` and the `config.destruction` tunables. |
+| `p2-sim` | Phase 2 physics side, in progress: building graph, bond stress, wake/sleep, debris/rubble, debug punch, wiring. |
+| `p2-vis` | Phase 2 visuals side, in progress: Voronoi fracture, piece renderer, `hideBuilding`, rubble baking, piece materials. |
+
+**Phase 2 design decision:** Rapier 0.21 has no joint-force read-back. So instead of one Rapier fixed joint per bond, connected pieces form compound rigid bodies, and bond stress is computed from real weight and bending moment on the bond graph, plus contact-force events for impacts. Collapse is still real Rapier dynamics. See the header of `src/destruction/types.ts`.
+
+**Next:**
+1. Review and merge city round 2 into `graphics-polish`, then run the whole-scene check.
+2. Merge `graphics-polish` into `main`; this deploys to Pages.
+3. Review `p2-sim` and `p2-vis`, merge both into `phase-2-destruction`, and swap `debug-render.ts` for `piece-render.ts` in `main.ts`.
+4. Run the Phase 2 gate checks.
+
+**Machine notes (Windows):**
+- Playwright was installed with `npm install --no-save playwright` plus `npx playwright install chromium`; redo this after a fresh `npm install`.
+- Git has no identity configured, so commits use `git -c user.name=Claude -c user.email=noreply@anthropic.com`.
+- Agent worktree isolation is refused here, probably because of the stray nested clone `MonsterGame/MonsterGame/`. Create worktrees by hand under `.claude/worktrees/` and link `node_modules` into them with a junction.
+
 ## Where things are
 
 | Branch | State | What it holds |
