@@ -77,12 +77,15 @@ function dumpUtil(env: Env, specId: number, top = 8): void {
   const s = env.d.sim.solver;
   const g = b.graph;
   s.util.fill(0);
-  s.solve(g, b.alive, b.bondAlive, G.pieces, G.pieces.length, 0, -9.81, 0, true, null, 0, null, config.destruction.bondStrengthScale, true);
+  const tS = performance.now();
+  const res = s.solve(g, b.alive, b.bondAlive, G.pieces, G.pieces.length, 0, -9.81, 0, true, null, 0, null, config.destruction.bondStrengthScale, null, 4000, 1e-6);
+  const tE = performance.now() - tS;
+  console.log(`  cold solve: ${res.iterations} iterations in ${fmt(tE, 2)} ms, residual ${res.residual.toExponential(1)}, max util ${fmt(s.maxUtil, 2)}`);
   const arr: Array<[number, number]> = [];
   for (let k = 0; k < g.bonds.length; k++) if (b.bondAlive[k] && s.util[k] > 0) arr.push([s.util[k], k]);
   arr.sort((x, y) => y[0] - x[0]);
   const pc = (i: number): string => (i < 0 ? 'ground' : `${g.pieces[i].kind}/f${g.pieces[i].floor}`);
-  console.log(`  util top (group ${G.pieces.length} pieces, ${arr.length} loaded bonds, over ${s.nOver}): ` + arr.slice(0, top).map(([u, k]) => `${fmt(u, 2)}:${pc(g.ba[k])}-${pc(g.bb[k])}`).join('  '));
+  console.log(`  util top (group ${G.pieces.length} pieces, ${arr.length} loaded bonds, over ${arr.filter((a) => a[0] >= 1).length}): ` + arr.slice(0, top).map(([u, k]) => `${fmt(u, 2)}:${pc(g.ba[k])}-${pc(g.bb[k])}`).join('  '));
 }
 
 // ------------------------------------------------------------------ test 1
@@ -124,29 +127,50 @@ function topPiece(env: Env, specId: number): number {
   return best;
 }
 
-function runCollapse(env: Env, spec: BuildingSpec, mode: 'side' | 'all', seconds: number, every: number, log: boolean): { samples: Sample[]; tm: StepTimes; maxChunks: number } {
+function runCollapse(env: Env, spec: BuildingSpec, mode: 'cols' | 'side' | 'all' | 'punch', seconds: number, every: number, log: boolean): { samples: Sample[]; tm: StepTimes; maxChunks: number } {
   env.d.wakeBuilding(spec.id);
   const b = env.d.sim.buildings.get(spec.id)!;
   const g = b.graph;
   const killedIdx: number[] = [];
+  const grounded = new Uint8Array(g.pieces.length);
+  for (let k = 0; k < g.bonds.length; k++) if (g.bb[k] < 0) grounded[g.ba[k]] = 1;
   for (let i = 0; i < g.pieces.length; i++) {
     const p = g.pieces[i];
-    if (p.kind !== 'column' || p.floor !== 0) continue;
-    // all ground columns, or the ones on the -x side
-    if (mode === 'all' || p.center[0] < -0.5) killedIdx.push(i);
+    if (mode === 'cols') {
+      // every ground-floor column (the cladding walls are left to carry the load, if they can)
+      if (p.kind === 'column' && p.floor === 0) killedIdx.push(i);
+    } else if (grounded[i] && (mode === 'all' || p.center[0] < -0.5)) {
+      // every ground support, or every ground support on the -x half
+      killedIdx.push(i);
+    }
   }
   const top = topPiece(env, spec.id);
   const top0 = worldOf(env.d, spec.id, top)!;
-  for (const i of killedIdx) env.d.killPiece(spec.id, i);
+  if (mode === 'punch') {
+    // what a player does: punch along every face of the ground floor, a step apart
+    const W = spec.width, D = spec.depth;
+    const pts: Array<[number, number]> = [];
+    for (let x = -W / 2; x <= W / 2 + 0.01; x += 4) pts.push([x, -D / 2 - 0.5], [x, D / 2 + 0.5]);
+    for (let z = -D / 2 + 4; z <= D / 2 - 3.99; z += 4) pts.push([-W / 2 - 0.5, z], [W / 2 + 0.5, z]);
+    for (const [lx, lz] of pts) {
+      for (let k = 0; k < 2; k++) {
+        env.d.applyDamage({ shape: { kind: 'sphere', center: localToWorld(spec, lx, 1.6, lz), radius: config.destruction.punchRadius }, damage: config.destruction.punchDamage, impulse: config.destruction.punchImpulse });
+      }
+    }
+    for (let i = 0; i < g.pieces.length; i++) if (!b.alive[i]) killedIdx.push(i);
+  }
+  // removed as if by demolition charges: pulverised, so the debris cannot carry what it held
+  for (const i of killedIdx) env.d.killPiece(spec.id, i, true);
+  if (process.env.TRACE) env.d.sim.trace = (m) => console.log('    ' + m);
   if (log) {
-    console.log(`removed ${killedIdx.length} ground-floor columns (${mode}); graph ${g.pieces.length}p/${g.bonds.length}b (${g.info.levels} levels, bay ${g.info.bay}), bonds alive ${b.liveBonds}`);
+    console.log(`removed ${killedIdx.length} ground-floor pieces (${mode}); graph ${g.pieces.length}p/${g.bonds.length}b (${g.info.levels} levels, bay ${g.info.bay}), bonds alive ${b.liveBonds}`);
     dumpUtil(env, spec.id, 12);
   }
   const samples: Sample[] = [];
   const tm = newTimes();
   let maxChunks = 0;
   const steps = Math.round(seconds / DT);
-  const per = Math.round(every / DT);
+  const per = Math.max(1, Math.round((Number(process.env.EVERY) || every) / DT));
   for (let s = 1; s <= steps; s++) {
     stepN(env, 1, tm);
     maxChunks = Math.max(maxChunks, env.d.stats().activeChunks);
@@ -161,7 +185,36 @@ function runCollapse(env: Env, spec: BuildingSpec, mode: 'side' | 'all', seconds
         topY: w ? w[1] : NaN, topOff: w ? Math.hypot(w[0] - top0[0], w[2] - top0[2]) : NaN, maxY,
       };
       samples.push(sm);
+      if (log) {
+        const sv = env.d.sim.solver as unknown as { itersRun: number; solves?: number };
+        const gs = env.d.sim.groups.filter((G) => G.bld === b);
+        const parts = gs.filter((G) => G.pieces.length > 2).map((G) => `${G.fixed ? 'F' : G.body.isSleeping() ? 'z' : 'd'}${G.pieces.length}@y${fmt(G.cur[1], 0)}`).join(' ');
+        let mh = 0, mm = 0;
+        for (const G of gs) for (const i of G.pieces) { pieceWorld(G, i, tmp); mh += g.mass[i] * tmp[1]; mm += g.mass[i]; }
+        console.log(`   intact-mass height ${fmt(mm ? mh / mm : 0)} m (${fmt(mm / 1000, 0)} t in pieces, ${gs.length} groups) | crushed ${env.d.sim.crushedTotal} impact-killed ${env.d.sim.impactKillsTotal} baked ${env.d.sim.bakedRestTotal}/${env.d.sim.bakedCapTotal}cap chunks ${env.d.stats().activeChunks} | cg ${sv.itersRun} it / ${sv.solves ?? '?'} solves | ${parts}`);
+        sv.itersRun = 0; sv.solves = 0;
+      }
       if (log) console.log(`t=${fmt(sm.t)}s groups=${sm.groups} (dyn ${gr.dynamic}) chunks=${sm.chunks} bonds=${sm.bonds} rubble=${st.rubbleBodies} roofY=${fmt(sm.topY)} (start ${fmt(top0[1])}) roofOffset=${fmt(sm.topOff)}m step ${fmt(tm.phys / tm.n, 2)}+${fmt(tm.sim / tm.n, 2)}ms`);
+    }
+  }
+  if (log) {
+    const w = env.physics.world;
+    for (const G of env.d.sim.groups) {
+      if (G.bld !== b || G.fixed || G.pieces.length < 3) continue;
+      const bd = G.body;
+      const lv = bd.linvel();
+      const touching = new Map<string, number>();
+      for (const i of G.pieces) {
+        const c = b.collider[i];
+        if (!c) continue;
+        w.contactPairsWith(c, (o) => {
+          const code = env.d.sim.owners.get(o.handle);
+          const par = o.parent();
+          const key = code === undefined ? `untracked(${par ? (par.isFixed() ? 'fixed' : 'dyn') : 'none'})` : code >= 2_000_000 ? 'static' : code >= 1_000_000 ? 'shard' : (Math.floor(code / 4096) === b.specId && b.group[code % 4096] === G ? 'self' : 'piece');
+          touching.set(key, (touching.get(key) ?? 0) + 1);
+        });
+      }
+      console.log(`  group ${G.pieces.length}p y=${fmt(G.cur[1])} v=(${fmt(lv.x, 2)},${fmt(lv.y, 2)},${fmt(lv.z, 2)}) type=${bd.bodyType()} enabled=${bd.isEnabled()} gs=${bd.gravityScale()} mass=${fmt(bd.mass() / 1000, 0)}t(G ${fmt(G.mass / 1000, 0)}t) sleeping=${bd.isSleeping()} ccd=${bd.isCcdEnabled()} contacts: ${[...touching].map(([k, v]) => `${k}:${v}`).join(' ')}`);
     }
   }
   return { samples, tm, maxChunks };
@@ -169,8 +222,8 @@ function runCollapse(env: Env, spec: BuildingSpec, mode: 'side' | 'all', seconds
 
 async function t2(): Promise<void> {
   const level: QualityLevel = (process.env.LEVEL as QualityLevel) || 'high';
-  for (const mode of ['side', 'all'] as const) {
-    console.log(`\n=== TEST 2 (${mode}): tower block, remove ground-floor columns (${level}) ===`);
+  for (const mode of ((process.env.MODES ?? 'cols,side,all,punch').split(',') as Array<'cols' | 'side' | 'all' | 'punch'>)) {
+    console.log(`\n=== TEST 2 (${mode}): tower block, remove ground-floor supports (${level}) ===`);
     const env = await setup(level);
     const spec = env.layout.specs.find((s) => s.type === 'tower')!;
     console.log(`tower id ${spec.id}: ${fmt(spec.width)} x ${fmt(spec.depth)} x ${fmt(spec.height)} m, ${spec.floors} floors`);

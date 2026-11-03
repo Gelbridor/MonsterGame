@@ -119,6 +119,13 @@ export const config = {
     punchDamage: 100,
     punchRadius: 4,
     punchImpulse: 2.0e6,
+    /** Structural stress solver: conjugate-gradient iterations per physics step, shared by all awake buildings. */
+    solverItersPerStep: 600,
+    /**
+     * Mean force while a member is crushed, as a fraction of its peak capacity (post-peak softening:
+     * buckled, hinged members carry little). Sets how much energy a crush absorbs from a falling mass.
+     */
+    crushWork: 0.15,
   },
 
   input: {

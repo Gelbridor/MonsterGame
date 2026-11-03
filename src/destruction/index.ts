@@ -35,18 +35,23 @@ export interface DestructionSystem extends Destruction {
   readonly sleep: SleepSystem;
   /** Wake a building now (also done automatically by damage and impacts). */
   wakeBuilding(specId: number): Building | null;
-  /** Kill piece `i` of building `specId` (wakes it first). Test hook. */
-  killPiece(specId: number, i: number): void;
+  /** Kill piece `i` of building `specId` (wakes it first). `crushed`: pulverise it (no load-carrying debris). Test hook. */
+  killPiece(specId: number, i: number, crushed?: boolean): void;
   /** Number of bonds broken during the last fixed step. */
   lastBroken(): number;
 }
 
-/** Joules of absorbed kinetic energy that destroy one unit of piece health. */
-const JOULES_PER_HEALTH = 4000;
+/**
+ * Absorbed impact energy per kg of the piece that removes one unit of health. Concrete (140 health)
+ * then breaks up when it lands from about 12 m, brick (60) from about 5 m, glass (4) from 0.3 m.
+ */
+const IMPACT_J_PER_KG_HEALTH = 0.85;
 /** Kinetic energy (J) of an impact on a sleeping building that wakes it. */
 const WAKE_ENERGY = 4e4;
 /** Largest apparent-gravity multiple a falling group can feel. */
 const MAX_K = 150;
+/** Most CG iterations one solve may use in one step. */
+const MAX_ITER_PER_SOLVE = 400;
 
 export function createDestruction(opts: DestructionOptions): DestructionSystem {
   const { physics, renderer, specs, quality } = opts;
@@ -68,6 +73,11 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     solver: new StressSolver(),
     nextGroupId: 1,
     brokenThisStep: 0,
+    crushEnergy: 0,
+    crushedTotal: 0,
+    impactKillsTotal: 0,
+    bakedRestTotal: 0,
+    bakedCapTotal: 0,
     acquireBody: () => { throw new Error('pool not ready'); },
     releaseBody: () => undefined,
     spawnShards: () => undefined,
@@ -86,7 +96,6 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
   const tmp = new Float64Array(3);
   const wakeQueue: number[] = [];
   const impactCodes: number[] = [];
-  const impactEnergy = new Map<number, number>();
 
   const wakeBuilding = (specId: number): Building | null => {
     const existing = sim.buildings.get(specId);
@@ -118,7 +127,9 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     const bld = sim.buildings.get(Math.floor(code / 4096));
     const G = bld?.group[code % 4096];
     if (G && !G.fixed) {
-      kin[0] = G.mass; kin[1] = G.vx; kin[2] = G.vy; kin[3] = G.vz;
+      // a piece absorbs (at most) its own kinetic energy on impact; the load the rest of its body
+      // puts through it is the stress solver's business, not impact damage
+      kin[0] = bld!.graph.mass[code % 4096]; kin[1] = G.vx; kin[2] = G.vy; kin[3] = G.vz;
     }
   };
 
@@ -152,26 +163,28 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
       const G = bld.group[i];
       if (!G) continue;
       G.hitStep = sim.step;
-      if (!G.fixed) {
+      // direction of the force on this piece: away from the other body
+      let dx = 0, dy = 1, dz = 0;
+      if (other !== undefined && other < STATIC_BASE) {
+        const oh = side === 0 ? h2 : h1;
+        const col = world.getCollider(oh);
+        if (col) {
+          const t = col.translation();
+          pieceWorld(G, i, tmp);
+          dx = tmp[0] - t.x; dy = tmp[1] - t.y; dz = tmp[2] - t.z;
+          const l = Math.hypot(dx, dy, dz) || 1;
+          dx /= l; dy /= l; dz /= l;
+        }
+      } else {
+        // the ground, rubble or a sleeping building: it is below and pushes up
+        const l = Math.hypot(fx, fy, fz);
+        if (l > 0) { dx = fx / l; dy = fy / l; dz = fz / l; if (dy < 0) { dx = -dx; dy = -dy; dz = -dz; } }
+      }
+      if (!G.fixed && dy > 0.5) {
+        // a loose body: what it rests on supports it ...
         bld.srcStamp[i] = sim.step;
       } else {
-        // direction of the force on this piece: away from the other body
-        let dx = 0, dy = 1, dz = 0;
-        const oc = other === undefined ? undefined : other;
-        if (oc !== undefined && oc < STATIC_BASE) {
-          const oh = side === 0 ? h2 : h1;
-          const col = world.getCollider(oh);
-          if (col) {
-            const t = col.translation();
-            pieceWorld(G, i, tmp);
-            dx = tmp[0] - t.x; dy = tmp[1] - t.y; dz = tmp[2] - t.z;
-            const l = Math.hypot(dx, dy, dz) || 1;
-            dx /= l; dy /= l; dz /= l;
-          }
-        } else {
-          const l = Math.hypot(fx, fy, fz);
-          if (l > 0) { dx = fx / l; dy = fy / l; dz = fz / l; if (dy < 0) { dx = -dx; dy = -dy; dz = -dz; } }
-        }
+        // ... and whatever rests on it, or strikes it, loads it
         const r = rotate(-G.cur[3], -G.cur[4], -G.cur[5], G.cur[6], dx, dy, dz);
         bld.ext[i * 3] += r[0] * mag; bld.ext[i * 3 + 1] += r[1] * mag; bld.ext[i * 3 + 2] += r[2] * mag;
       }
@@ -191,6 +204,26 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
   const push0 = new Float64Array(3);
   const lastBroken = { n: 0 };
 
+  /**
+   * A single loose piece has no bonds to fail, so its own section takes the load: if what rests on
+   * it exceeds its crushing capacity (material strength x the face area carrying the load), it is
+   * crushed.
+   */
+  const crushLoosePiece = (G: Group, load: number, scale: number): void => {
+    const bld = G.bld;
+    const i = G.pieces[0];
+    if (load <= 0 || !bld.alive[i]) return;
+    const p = bld.graph.pieces[i];
+    const ex = Math.abs(bld.ext[i * 3]), ey = Math.abs(bld.ext[i * 3 + 1]), ez = Math.abs(bld.ext[i * 3 + 2]);
+    const h = p.halfExtents;
+    const area = ex >= ey && ex >= ez ? 4 * h[1] * h[2] : ey >= ez ? 4 * h[0] * h[2] : 4 * h[0] * h[1];
+    if (load > MATERIALS[p.material].strength * area * scale) {
+      sim.crushedTotal++;
+      push0.fill(0);
+      destroyPiece(sim, bld, i, push0, true);
+    }
+  };
+
   const fixedUpdate = (dt: number): void => {
     sim.step++;
     sim.time += dt;
@@ -206,6 +239,8 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
 
     const groups = sim.groups;
     const n = groups.length;
+    /** CG iterations left for this step's stress solves (unfinished solves resume next step). */
+    let budget = config.destruction.solverItersPerStep;
     for (let k = 0; k < n; k++) {
       const G = groups[k];
       if (!G.live) continue;
@@ -213,20 +248,31 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
       if (G.fixed) {
         if (G.dirty || G.hitStep === sim.step) {
           const useExt = G.hitStep === sim.step;
-          G.dirty = false;
-          const broke = solveGroup(sim, G, 0, -sim.g, 0, scale, useExt);
-          if (broke > 0) G.dirty = true;
+          if (budget > 0) {
+            const before = sim.solver.itersRun;
+            const broke = solveGroup(sim, G, 0, -sim.g, 0, scale, useExt, Math.min(budget, MAX_ITER_PER_SOLVE));
+            budget -= sim.solver.itersRun - before;
+            // unconverged (-1): stay dirty, the warm start resumes next step; broke > 0: re-solve
+            G.dirty = broke !== 0;
+          } else {
+            G.dirty = true;
+          }
           if (useExt) for (const i of G.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
         }
         continue;
       }
       const body = G.body;
-      if (body.isSleeping()) continue;
+      if (body.isSleeping()) {
+        if (G.hitStep === sim.step) for (const i of G.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
+        continue;
+      }
       G.prev.set(G.cur);
       readPose(G);
       const lv = body.linvel();
       const ax = (lv.x - G.vx) / dt, ay = (lv.y - G.vy) / dt, az = (lv.z - G.vz) / dt;
+      const pvx = G.vx, pvy = G.vy, pvz = G.vz;
       G.vx = lv.x; G.vy = lv.y; G.vz = lv.z;
+      if (sim.trace && G.pieces.length > 20) sim.trace(`step ${sim.step} g${G.id} ${G.pieces.length}p y=${G.cur[1].toFixed(2)} vy=${lv.y.toFixed(2)} hit=${G.hitStep === sim.step}`);
       if (G.hitStep === sim.step) {
         // apparent gravity = g - a (in the group's own frame)
         let wx = -ax, wy = -sim.g - ay, wz = -az;
@@ -234,10 +280,31 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
         const maxMag = sim.g * MAX_K;
         if (mag > maxMag) { const s = maxMag / mag; wx *= s; wy *= s; wz *= s; }
         const kfac = mag / sim.g;
-        if (kfac > 1.3 || (sim.step + G.id) % 4 === 0) {
+        // load from bodies resting on (or striking) this one, relative to its own weight
+        let ext2 = 0;
+        for (const i of G.pieces) ext2 += bld.ext[i * 3] ** 2 + bld.ext[i * 3 + 1] ** 2 + bld.ext[i * 3 + 2] ** 2;
+        const extRatio = Math.sqrt(ext2) / (G.mass * sim.g);
+        if (G.pieces.length === 1) {
+          crushLoosePiece(G, Math.sqrt(ext2), scale);
+        } else if ((kfac > 1.3 || extRatio > 0.3 || (sim.step + G.id) % 4 === 0) && budget > 0) {
           const gl = gravityInFrame(G, wx, wy, wz);
-          solveGroup(sim, G, gl[0], gl[1], gl[2], scale, false);
+          const before = sim.solver.itersRun;
+          sim.crushEnergy = 0;
+          solveGroup(sim, G, gl[0], gl[1], gl[2], scale, true, Math.min(budget, MAX_ITER_PER_SOLVE));
+          budget -= sim.solver.itersRun - before;
+          if (sim.crushEnergy > 0 && G.live) {
+            // The members that stopped this body were crushed: they could not stop it. It keeps
+            // the momentum it had before the contact, less the work done crushing them.
+            const lost = 0.5 * G.mass * (pvx * pvx + pvy * pvy + pvz * pvz - (lv.x * lv.x + lv.y * lv.y + lv.z * lv.z));
+            if (lost > 0) {
+              const keep = Math.sqrt(Math.max(0, 1 - sim.crushEnergy / lost));
+              const nv = { x: lv.x + (pvx - lv.x) * keep, y: lv.y + (pvy - lv.y) * keep, z: lv.z + (pvz - lv.z) * keep };
+              body.setLinvel(nv, true);
+              G.vx = nv.x; G.vy = nv.y; G.vz = nv.z;
+            }
+          }
         }
+        if (G.live) for (const i of G.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
       }
     }
 
@@ -249,10 +316,10 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
       const i = code % 4096;
       if (!bld.alive[i]) continue;
       const piece = bld.graph.pieces[i];
-      const dmg = bld.impact[i] / JOULES_PER_HEALTH / (MATERIALS[piece.material].impactG / 10);
+      const dmg = bld.impact[i] / (piece.mass * IMPACT_J_PER_KG_HEALTH) / Math.max(0.01, config.destruction.healthScale);
       if (dmg < 0.5) continue;
       bld.health[i] -= dmg;
-      if (bld.health[i] <= 0) destroyPiece(sim, bld, i, push0);
+      if (bld.health[i] <= 0) { sim.impactKillsTotal++; destroyPiece(sim, bld, i, push0); }
       else sim.renderer.setDamage(bld.handle[i], 1 - bld.health[i] / piece.maxHealth);
     }
     flushSplits(sim);
@@ -447,11 +514,11 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     stats,
     wakeBuilding,
     lastBroken: () => lastBroken.n,
-    killPiece(specId: number, i: number): void {
+    killPiece(specId: number, i: number, crushed = false): void {
       const b = wakeBuilding(specId);
       if (!b || !b.alive[i]) return;
       push0.fill(0);
-      destroyPiece(sim, b, i, push0);
+      destroyPiece(sim, b, i, push0, crushed);
       flushSplits(sim);
     },
   };

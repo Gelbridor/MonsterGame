@@ -12,7 +12,7 @@ import { config } from '../config';
 import { generateBuilding } from './building-gen';
 import { MATERIALS } from './materials';
 import {
-  SHARD_BASE, createGroup, makeBuilding, readPose, resplit, retireGroup, rotate,
+  CG_CRUSHED, SHARD_BASE, createGroup, makeBuilding, readPose, resplit, retireGroup, rotate,
   type Building, type Group, type PooledBody, type Sim,
 } from './joints';
 import type { FractureResult, RenderHandle } from './types';
@@ -31,6 +31,8 @@ interface Debris {
   /** Shard geometry for the rubble collider (hull points relative to the body origin) or null for a box. */
   hull: Float32Array | null;
   hx: number; hy: number; hz: number;
+  /** Pulverised by compressive failure: does not collide with building pieces. */
+  crushed: boolean;
 }
 
 export interface SleepSystem {
@@ -52,6 +54,11 @@ export interface SleepOptions {
   level: QualityLevel;
   maxActiveChunks: number;
 }
+
+/** Loose groups with at most this many pieces are baked to rubble once at rest. */
+const BAKE_MAX_PIECES = 6;
+/** Shards a crushed (pulverised) piece breaks into. */
+const CRUSHED_SHARDS = 3;
 
 export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
   const R = sim.R;
@@ -76,7 +83,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
   for (let i = 0; i < poolSize; i++) {
     debris.push({
       used: false, body: null, pooled: true, collider: null, handle: -1, born: 0, life: 5, rest: 0,
-      cur: new Float64Array(7), prev: new Float64Array(7), hull: null, hx: 0, hy: 0, hz: 0,
+      cur: new Float64Array(7), prev: new Float64Array(7), hull: null, hx: 0, hy: 0, hz: 0, crushed: false,
     });
   }
   const debrisFree: number[] = [];
@@ -90,6 +97,33 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  /**
+   * True if a building piece of another body rests on (touches) this collider. Such debris is
+   * carrying load and must stay a live body: baking it to static rubble would freeze whatever it
+   * holds up in mid-air.
+   */
+  let probeSelf: Group | null = null;
+  let probeHit = false;
+  const probeCb = (o: RAPIER.Collider): void => {
+    if (probeHit) return;
+    const code = sim.owners.get(o.handle);
+    if (code === undefined || code >= SHARD_BASE) return;
+    const bld = sim.buildings.get(Math.floor(code / 4096));
+    const G = bld?.group[code % 4096];
+    if (G && G !== probeSelf && !G.fixed) probeHit = true;
+  };
+  const carriesPieces = (col: RAPIER.Collider | null, self: Group | null): boolean => {
+    if (!col) return false;
+    probeSelf = self;
+    probeHit = false;
+    world.contactPairsWith(col, probeCb);
+    return probeHit;
+  };
+  const groupCarries = (G: Group): boolean => {
+    for (const i of G.pieces) if (carriesPieces(G.bld.collider[i], G)) return true;
+    return false;
   };
 
   const self: SleepSystem = {
@@ -146,10 +180,11 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
   const lerpPose = new Float64Array(7);
   void lerpPose;
 
-  sim.spawnShards = (bld: Building, i: number, pos: Float64Array, quat: Float64Array, vel: Float64Array, ang: Float64Array, push: Float64Array): void => {
+  sim.spawnShards = (bld: Building, i: number, pos: Float64Array, quat: Float64Array, vel: Float64Array, ang: Float64Array, push: Float64Array, crushed: boolean): void => {
     const piece = bld.graph.pieces[i];
     const mat = MATERIALS[piece.material];
-    const fr: FractureResult = sim.renderer.fracture(piece, shardCountFor(mat.shards));
+    // pulverised members break into a few big lumps (the rest is dust, an effect, not bodies)
+    const fr: FractureResult = sim.renderer.fracture(piece, crushed ? CRUSHED_SHARDS : shardCountFor(mat.shards));
     const n = fr.shards.length;
     const volTotal = piece.halfExtents[0] * piece.halfExtents[1] * piece.halfExtents[2] * 8;
     for (let k = 0; k < n; k++) {
@@ -184,6 +219,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
         hx = hy = hz = e;
         desc = R.ColliderDesc.cuboid(e, e, e);
       }
+      if (crushed) desc.setCollisionGroups(CG_CRUSHED);
       desc.setMass(mass).setFriction(0.7).setRestitution(0.1)
         .setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS).setContactForceEventThreshold(mass * sim.g * 6);
       const col = world.createCollider(desc, body);
@@ -195,6 +231,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
       d.rest = 0;
       d.hull = desc === null || hx > 0 ? null : sh.hull;
       d.hx = hx; d.hy = hy; d.hz = hz;
+      d.crushed = crushed;
       d.cur[0] = px; d.cur[1] = py; d.cur[2] = pz;
       d.cur[3] = quat[0]; d.cur[4] = quat[1]; d.cur[5] = quat[2]; d.cur[6] = quat[3];
       d.prev.set(d.cur);
@@ -204,9 +241,10 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
 
   // ---- rubble
   const rq = { x: 0, y: 0, z: 0, w: 1 };
-  const addRubble = (desc: RAPIER.ColliderDesc, x: number, y: number, z: number, q0: number, q1: number, q2: number, q3: number): void => {
+  const addRubble = (desc: RAPIER.ColliderDesc, x: number, y: number, z: number, q0: number, q1: number, q2: number, q3: number, crushed = false): void => {
     rq.x = q0; rq.y = q1; rq.z = q2; rq.w = q3;
     desc.setTranslation(x, y, z).setRotation(rq).setFriction(0.9);
+    if (crushed) desc.setCollisionGroups(CG_CRUSHED);
     world.createCollider(desc, rubbleBody);
     self.rubbleCount++;
   };
@@ -217,7 +255,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
     const t = d.body.translation();
     const q = d.body.rotation();
     const desc = d.hull ? R.ColliderDesc.convexHull(d.hull) : R.ColliderDesc.cuboid(d.hx, d.hy, d.hz);
-    if (desc) addRubble(desc, t.x, t.y, t.z, q.x, q.y, q.z, q.w);
+    if (desc) addRubble(desc, t.x, t.y, t.z, q.x, q.y, q.z, q.w, d.crushed);
     const col = d.collider;
     if (col) sim.owners.delete(col.handle);
     sim.releaseBody(d.body, d.pooled);
@@ -258,11 +296,12 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
     // gather candidates oldest-first (debris shards and loose groups)
     const cand: Array<{ born: number; di: number; G: Group | null }> = [];
     for (let i = 0; i < debris.length; i++) if (debris[i].used) cand.push({ born: debris[i].born, di: i, G: null });
-    for (const G of sim.groups) if (!G.fixed && !G.busy && !G.pendingSplit) cand.push({ born: G.born, di: -1, G });
+    // loose groups only once at rest: baking a falling body would freeze it in mid-air
+    for (const G of sim.groups) if (!G.fixed && !G.busy && !G.pendingSplit && G.body.isSleeping()) cand.push({ born: G.born, di: -1, G });
     cand.sort((a, b) => a.born - b.born);
     for (let k = 0; k < cand.length && n > limit; k++) {
       const c = cand[k];
-      if (c.G) { if (c.G.live) { bakeGroup(c.G); n--; } } else { bakeDebris(c.di); n--; }
+      if (c.G) { if (c.G.live) { sim.bakedCapTotal += c.G.pieces.length; bakeGroup(c.G); n--; } } else { bakeDebris(c.di); n--; }
     }
   }
   function enforceCap(): void {
@@ -290,14 +329,17 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
         if (v.x * v.x + v.y * v.y + v.z * v.z < 0.25) d.rest += dt;
         else d.rest = 0;
       }
-      if (d.rest > 0.4 || age > d.life * 3 + lifetime) bakeDebris(i);
+      if ((d.rest > 0.4 || age > d.life * 3 + lifetime) && !carriesPieces(d.collider, null)) bakeDebris(i);
     }
     for (let k = sim.groups.length - 1; k >= 0; k--) {
       const G = sim.groups[k];
       if (G.fixed || !G.live) continue;
       if (G.body.isSleeping()) G.rest += dt;
       else G.rest = 0;
-      if (G.rest > 0.6 || sim.time - G.born > 40) bakeGroup(G);
+      // Small loose groups at rest become static rubble. Big ones (a fallen floor, a standing
+      // remnant) stay as sleeping bodies so they can still be broken, and are only merged
+      // early by the chunk cap.
+      if (G.pieces.length <= BAKE_MAX_PIECES && (G.rest > 0.6 || sim.time - G.born > 40) && !groupCarries(G)) { sim.bakedRestTotal += G.pieces.length; bakeGroup(G); }
     }
   }
 

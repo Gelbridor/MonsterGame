@@ -1,13 +1,9 @@
-// Bonds, the load/moment solver, breaking, and group splitting.
+// Bonds, breaking, and group splitting.
 //
 // Rapier 0.21 has no joint-force read-back, so connected pieces share ONE rigid body (a compound of
-// box colliders with true masses) and bond stress is computed from real weight:
-//   - Load flows from every piece "downhill" along the bond graph towards its supports (the ground
-//     for a fixed group, the pieces in contact for a falling one). Each piece splits its carried load
-//     over its supporting bonds like a rigid plate on elastic supports (force + moment balance), so
-//     an overhang or a lopsided support set puts real shear, tension and bending on the bonds.
-//   - A falling group feels an apparent gravity (g minus its measured acceleration), so a floor that
-//     lands carries many times its weight and the stack breaks from the contact up: pancaking.
+// box colliders with true masses) and bond stress comes from a structural solve of the bond graph
+// (src/destruction/stress.ts): an elastic 6-DOF frame solve under true weight, the apparent gravity
+// of a landing body, and measured impact forces.
 //   - A bond whose utilisation (compression + tension + shear + bending) reaches 1 breaks. When bonds
 //     break the group is split into connected components; each becomes its own body with the
 //     velocity of the old body at its centre of mass. A component with a ground bond stays fixed,
@@ -17,212 +13,23 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { BuildingSpec } from '../city/town-layout';
 import type { DestructionRenderer, RenderHandle } from './types';
 import type { GenGraph } from './building-gen';
+import { StressSolver } from './stress';
+import { config } from '../config';
 
-// ------------------------------------------------------------------ stress solver
+export { StressSolver };
 
-const DELTA2 = 0.25 * 0.25;
-/** Design target: the intact building uses this fraction of every bond's limit. */
+// ------------------------------------------------------------------ bond design
+
+/** Design target: the intact building uses this fraction of every bond's limit (safety factor 1/x). */
 const DESIGN_UTIL = 0.35;
-
-export class StressSolver {
-  P = new Float64Array(0);
-  Q = new Float64Array(0);
-  E = new Float64Array(0);
-  d = new Int32Array(0);
-  order = new Int32Array(0);
-  util = new Float32Array(0);
-  over = new Int32Array(0);
-  overD = new Int32Array(0);
-  nOver = 0;
-  private ob = new Int32Array(1024);
-  private ow = new Float64Array(1024);
-
-  ensure(np: number, nb: number): void {
-    if (this.P.length < np) {
-      const n = Math.max(np, 64);
-      this.P = new Float64Array(n);
-      this.Q = new Float64Array(n * 3);
-      this.E = new Float64Array(n * 3);
-      this.d = new Int32Array(n);
-      this.order = new Int32Array(n);
-    }
-    if (this.util.length < nb) {
-      const n = Math.max(nb, 128);
-      this.util = new Float32Array(n);
-      this.over = new Int32Array(n);
-      this.overD = new Int32Array(n);
-    }
-  }
-
-  /**
-   * Solve the load on every bond of the pieces in `list`. (gx,gy,gz) is the apparent gravity in the
-   * building frame. `fixed`: sources are pieces with a live ground bond; otherwise pieces whose
-   * srcStamp equals `stamp`. Fills util[] and (if `record`) over[]/overD[].
-   */
-  solve(
-    G: GenGraph, pAlive: Uint8Array, bAlive: Uint8Array, list: ArrayLike<number>, n: number,
-    gx: number, gy: number, gz: number, fixed: boolean,
-    srcStamp: Int32Array | null, stamp: number, ext: Float32Array | null, scale: number, record: boolean,
-  ): void {
-    this.nOver = 0;
-    const { P, Q, E, d, order, util } = this;
-    const { ba, bb, anchor, dir, fcap, mcap, tfrac, sfrac, adjStart, adjBond, cen, mass, cladding } = G;
-    let qn = 0;
-    for (let k = 0; k < n; k++) d[list[k]] = -1;
-    for (let k = 0; k < n; k++) {
-      const i = list[k];
-      if (!pAlive[i]) continue;
-      if (fixed) {
-        for (let e = adjStart[i]; e < adjStart[i + 1]; e++) {
-          const b = adjBond[e];
-          if (bAlive[b] && bb[b] < 0) { d[i] = 0; order[qn++] = i; break; }
-        }
-      } else if (srcStamp![i] === stamp) {
-        d[i] = 0;
-        order[qn++] = i;
-      }
-    }
-    if (qn === 0) return;
-    for (let head = 0; head < qn; head++) {
-      const i = order[head];
-      for (let e = adjStart[i]; e < adjStart[i + 1]; e++) {
-        const b = adjBond[e];
-        if (!bAlive[b]) continue;
-        const j = ba[b] === i ? bb[b] : ba[b];
-        if (j >= 0 && pAlive[j] && d[j] < 0) { d[j] = d[i] + 1; order[qn++] = j; }
-      }
-    }
-    const gm = Math.hypot(gx, gy, gz);
-    let hx = 0, hy = -1, hz = 0;
-    if (gm > 1e-6) { hx = gx / gm; hy = gy / gm; hz = gz / gm; }
-    // plane basis perpendicular to the load direction
-    let tx = 1, ty = 0, tz = 0;
-    if (Math.abs(hx) > 0.9) { tx = 0; ty = 1; }
-    let u1x = ty * hz - tz * hy, u1y = tz * hx - tx * hz, u1z = tx * hy - ty * hx;
-    const ul = Math.hypot(u1x, u1y, u1z);
-    u1x /= ul; u1y /= ul; u1z /= ul;
-    const u2x = hy * u1z - hz * u1y, u2y = hz * u1x - hx * u1z, u2z = hx * u1y - hy * u1x;
-
-    for (let k = 0; k < qn; k++) {
-      const i = order[k];
-      let p = mass[i] * gm;
-      let ex = 0, ey = 0, ez = 0;
-      if (ext) {
-        const fx = ext[i * 3], fy = ext[i * 3 + 1], fz = ext[i * 3 + 2];
-        const pe = fx * hx + fy * hy + fz * hz;
-        p += pe;
-        ex = fx - pe * hx; ey = fy - pe * hy; ez = fz - pe * hz;
-      }
-      P[i] = p;
-      Q[i * 3] = p * cen[i * 3]; Q[i * 3 + 1] = p * cen[i * 3 + 1]; Q[i * 3 + 2] = p * cen[i * 3 + 2];
-      E[i * 3] = ex; E[i * 3 + 1] = ey; E[i * 3 + 2] = ez;
-    }
-
-    const ob = this.ob, ow = this.ow;
-    for (let k = qn - 1; k >= 0; k--) {
-      const i = order[k];
-      if (!fixed && d[i] === 0) continue;
-      let nOut = 0, sw = 0;
-      for (let e = adjStart[i]; e < adjStart[i + 1]; e++) {
-        const b = adjBond[e];
-        if (!bAlive[b]) continue;
-        const j = ba[b] === i ? bb[b] : ba[b];
-        const out = j < 0 ? fixed && d[i] === 0 : pAlive[j] === 1 && d[j] >= 0 && d[j] < d[i];
-        if (!out || nOut >= 1024) continue;
-        const dd = Math.abs(dir[b * 3] * hx + dir[b * 3 + 1] * hy + dir[b * 3 + 2] * hz);
-        let w = fcap[b] * (0.25 + 0.75 * dd);
-        // structure does not hand its load to non-structural cladding (unless nothing else is left)
-        if (j >= 0 && cladding[j] === 1 && cladding[i] === 0) w *= 0.001;
-        ob[nOut] = b; ow[nOut] = w; nOut++; sw += w;
-      }
-      if (nOut === 0) continue;
-      const Pi = P[i];
-      let lx = cen[i * 3], ly = cen[i * 3 + 1], lz = cen[i * 3 + 2];
-      if (Pi > 1e-9) { lx = Q[i * 3] / Pi; ly = Q[i * 3 + 1] / Pi; lz = Q[i * 3 + 2] / Pi; }
-      let cx = 0, cy = 0, cz = 0;
-      for (let q = 0; q < nOut; q++) {
-        const b = ob[q], w = ow[q];
-        cx += w * anchor[b * 3]; cy += w * anchor[b * 3 + 1]; cz += w * anchor[b * 3 + 2];
-      }
-      cx /= sw; cy /= sw; cz /= sw;
-      const ex = lx - cx, ey = ly - cy, ez = lz - cz;
-      const e1 = ex * u1x + ey * u1y + ez * u1z;
-      const e2 = ex * u2x + ey * u2y + ez * u2z;
-      let i11 = sw * DELTA2, i12 = 0, i22 = sw * DELTA2;
-      for (let q = 0; q < nOut; q++) {
-        const b = ob[q], w = ow[q];
-        const ax = anchor[b * 3] - cx, ay = anchor[b * 3 + 1] - cy, az = anchor[b * 3 + 2] - cz;
-        const a1 = ax * u1x + ay * u1y + az * u1z;
-        const a2 = ax * u2x + ay * u2y + az * u2z;
-        i11 += w * a1 * a1; i12 += w * a1 * a2; i22 += w * a2 * a2;
-      }
-      const det = i11 * i22 - i12 * i12;
-      const be1 = (i22 * Pi * e1 - i12 * Pi * e2) / det;
-      const be2 = (-i12 * Pi * e1 + i11 * Pi * e2) / det;
-      // Rigid-plate reactions, and the moment the reactions could not balance.
-      let r1 = Pi * e1, r2 = Pi * e2;
-      const Rk = this.ow2(nOut);
-      for (let q = 0; q < nOut; q++) {
-        const b = ob[q], w = ow[q];
-        const ax = anchor[b * 3] - cx, ay = anchor[b * 3 + 1] - cy, az = anchor[b * 3 + 2] - cz;
-        const a1 = ax * u1x + ay * u1y + az * u1z;
-        const a2 = ax * u2x + ay * u2y + az * u2z;
-        const R = w * (Pi / sw + be1 * a1 + be2 * a2);
-        Rk[q] = R;
-        r1 -= R * a1; r2 -= R * a2;
-      }
-      const mres = Math.hypot(r1, r2);
-      const eix = E[i * 3], eiy = E[i * 3 + 1], eiz = E[i * 3 + 2];
-      for (let q = 0; q < nOut; q++) {
-        const b = ob[q], w = ow[q];
-        const R = Rk[q];
-        const fr = w / sw;
-        const fx = R * hx + eix * fr, fy = R * hy + eiy * fr, fz = R * hz + eiz * fr;
-        const sgn = ba[b] === i ? 1 : -1;
-        const dx = dir[b * 3] * sgn, dy = dir[b * 3 + 1] * sgn, dz = dir[b * 3 + 2] * sgn;
-        const fn = fx * dx + fy * dy + fz * dz;
-        const ft = Math.sqrt(Math.max(0, fx * fx + fy * fy + fz * fz - fn * fn));
-        const cap = fcap[b] * scale;
-        const mc = mcap[b] * scale;
-        const u = (fn >= 0 ? fn / cap : -fn / (cap * tfrac[b])) + ft / (cap * sfrac[b]) + (mres * fr) / mc;
-        util[b] = u;
-        if (record && u >= 1) {
-          this.over[this.nOver] = b;
-          this.overD[this.nOver] = d[i];
-          this.nOver++;
-        }
-        const j = ba[b] === i ? bb[b] : ba[b];
-        if (j >= 0) {
-          P[j] += R;
-          Q[j * 3] += R * anchor[b * 3]; Q[j * 3 + 1] += R * anchor[b * 3 + 1]; Q[j * 3 + 2] += R * anchor[b * 3 + 2];
-          E[j * 3] += eix * fr; E[j * 3 + 1] += eiy * fr; E[j * 3 + 2] += eiz * fr;
-        }
-      }
-    }
-  }
-
-  private rk = new Float64Array(1024);
-  private ow2(_n: number): Float64Array {
-    return this.rk;
-  }
-
-  /** Keep only overloaded bonds at the failure front (smallest distance from the supports, plus one). */
-  frontier(band: number): number {
-    if (this.nOver === 0) return 0;
-    let dmin = 1e9;
-    for (let k = 0; k < this.nOver; k++) if (this.overD[k] < dmin) dmin = this.overD[k];
-    let m = 0;
-    for (let k = 0; k < this.nOver; k++) {
-      if (this.overD[k] <= dmin + band) this.over[m++] = this.over[k];
-    }
-    this.nOver = m;
-    return m;
-  }
-}
-
 const designSolver = new StressSolver();
 
-/** Size every bond so the intact building carries its own weight at DESIGN_UTIL. Returns iterations used. */
+/**
+ * Size every bond so the intact building carries its own weight at DESIGN_UTIL: one accurate
+ * elastic solve of the whole building under gravity, then any bond whose load exceeds the design
+ * level is strengthened to exactly that level (stiffness does not depend on strength, so one
+ * solve suffices). Returns the CG iterations used.
+ */
 export function designBonds(G: GenGraph): number {
   const np = G.pieces.length, nb = G.bonds.length;
   designSolver.ensure(np, nb);
@@ -230,27 +37,22 @@ export function designBonds(G: GenGraph): number {
   const bAlive = new Uint8Array(nb).fill(1);
   const list = new Int32Array(np);
   for (let i = 0; i < np; i++) list[i] = i;
-  let it = 0;
-  for (; it < 8; it++) {
-    designSolver.util.fill(0, 0, nb);
-    designSolver.solve(G, pAlive, bAlive, list, np, 0, -9.81, 0, true, null, 0, null, 1, false);
-    let changed = false;
-    for (let b = 0; b < nb; b++) {
-      const u = designSolver.util[b];
-      if (u > DESIGN_UTIL * 1.02) {
-        const f = u / DESIGN_UTIL;
-        G.fcap[b] *= f;
-        G.mcap[b] *= f;
-        changed = true;
-      }
+  const res = designSolver.solve(G, pAlive, bAlive, list, np, 0, -9.81, 0, true, null, 0, null, 1, null, 4000, 1e-7);
+  for (let k = 0; k < designSolver.nBonds; k++) {
+    const b = designSolver.bonds[k];
+    const u = designSolver.util[b];
+    if (u > DESIGN_UTIL) {
+      const f = u / DESIGN_UTIL;
+      G.fcap[b] *= f;
+      G.mcap[b] *= f;
     }
-    if (!changed) break;
   }
   for (let b = 0; b < nb; b++) {
     G.bonds[b].maxForce = G.fcap[b];
     G.bonds[b].maxMoment = G.mcap[b];
   }
-  return it;
+  G.info.designIters = res.iterations;
+  return res.iterations;
 }
 
 // ------------------------------------------------------------------ runtime structures
@@ -309,6 +111,8 @@ export interface Building {
   liveBonds: number;
   livePieces: number;
   damaged: Uint8Array;
+  /** Last solved 6-DOF displacement of every piece (warm start for the next solve). */
+  disp: Float64Array;
 }
 
 export interface PooledBody {
@@ -331,14 +135,32 @@ export interface Sim {
   solver: StressSolver;
   nextGroupId: number;
   brokenThisStep: number;
+  /** Energy (J) absorbed by members crushed in the last solveGroup() call. */
+  crushEnergy: number;
+  /** Pieces crushed / destroyed by impact energy since start (stats). */
+  crushedTotal: number;
+  /** Optional debug trace (harness). */
+  trace?: (msg: string) => void;
+  impactKillsTotal: number;
+  /** Pieces baked to rubble at rest / early by the chunk cap (stats). */
+  bakedRestTotal: number;
+  bakedCapTotal: number;
   acquireBody(): PooledBody;
   releaseBody(b: RAPIER.RigidBody, pooled: boolean): void;
   /** Break piece `i` of `bld` into shards (physics debris + visuals). Pose/velocity given in world space. */
-  spawnShards(bld: Building, i: number, pos: Float64Array, quat: Float64Array, vel: Float64Array, ang: Float64Array, push: Float64Array): void;
+  spawnShards(bld: Building, i: number, pos: Float64Array, quat: Float64Array, vel: Float64Array, ang: Float64Array, push: Float64Array, crushed: boolean): void;
   scratchComp: Int32Array;
   scratchQueue: Int32Array;
   splitQueue: Group[];
 }
+
+/**
+ * Rapier collision groups ((membership << 16) | filter). Building pieces are their own class so
+ * pulverised (crushed) debris can skip them: crushed material cannot carry load, it spills out
+ * from under the mass it failed beneath, while it still lands on the ground and other debris.
+ */
+export const CG_PIECE = (0x0002 << 16) | 0xffff;
+export const CG_CRUSHED = (0x0004 << 16) | (0xffff & ~0x0002);
 
 const OWNER_PIECE = 4096;
 export const pieceCode = (specId: number, i: number): number => specId * OWNER_PIECE + i;
@@ -390,6 +212,7 @@ export function makeBuilding(spec: BuildingSpec, graph: GenGraph): Building {
     ext: new Float32Array(np * 3), extStamp: new Int32Array(np).fill(-1), srcStamp: new Int32Array(np).fill(-1),
     impact: new Float32Array(np), impactStamp: new Int32Array(np).fill(-1),
     liveBonds: nb, livePieces: np, damaged: new Uint8Array(np),
+    disp: new Float64Array(np * 6),
   };
 }
 
@@ -403,6 +226,7 @@ function addPieceCollider(sim: Sim, bld: Building, i: number, G: Group): void {
     .setMass(p.mass)
     .setFriction(0.8)
     .setRestitution(0.04)
+    .setCollisionGroups(CG_PIECE)
     .setActiveEvents(R.ActiveEvents.CONTACT_FORCE_EVENTS)
     .setContactForceEventThreshold(p.mass * sim.g * 1.2);
   const c = sim.world.createCollider(desc, G.body);
@@ -607,8 +431,11 @@ export function killBond(sim: Sim, bld: Building, b: number): void {
 
 const _p = new Float64Array(3), _q = new Float64Array(4), _vel = new Float64Array(3), _av = new Float64Array(3);
 
-/** Destroy a piece: remove it from its body, turn it into shards, drop its bonds. `push` is an extra velocity (m/s). */
-export function destroyPiece(sim: Sim, bld: Building, i: number, push: Float64Array): void {
+/**
+ * Destroy a piece: remove it from its body, turn it into shards, drop its bonds. `push` is an extra
+ * velocity (m/s). `crushed`: it failed in compression, so its shards are pulverised (see CG_CRUSHED).
+ */
+export function destroyPiece(sim: Sim, bld: Building, i: number, push: Float64Array, crushed = false): void {
   if (!bld.alive[i]) return;
   const G = bld.group[i];
   const g = bld.graph;
@@ -643,7 +470,7 @@ export function destroyPiece(sim: Sim, bld: Building, i: number, push: Float64Ar
   }
   const h = bld.handle[i];
   bld.handle[i] = -1;
-  sim.spawnShards(bld, i, _p, _q, _vel, _av, push);
+  sim.spawnShards(bld, i, _p, _q, _vel, _av, push, crushed);
   if (h >= 0) sim.renderer.remove(h as RenderHandle);
   if (G) queueSplit(sim, G);
 }
@@ -653,19 +480,53 @@ export function destroyPiece(sim: Sim, bld: Building, i: number, push: Float64Ar
 const _gl = new Float64Array(3);
 
 /**
- * Solve the group's bond loads and break the overloaded ones at the failure front.
- * (gx,gy,gz): apparent gravity in the building frame. Returns number of bonds broken.
+ * Solve the group's bond loads and break the overloaded ones.
+ * (gx,gy,gz): apparent gravity in the building frame. Returns the number of bonds broken, or -1 if
+ * the solve did not converge within `maxIter` (the warm start keeps the progress; call again).
  */
-export function solveGroup(sim: Sim, G: Group, gx: number, gy: number, gz: number, strengthScale: number, useExt: boolean): number {
+export function solveGroup(sim: Sim, G: Group, gx: number, gy: number, gz: number, strengthScale: number, useExt: boolean, maxIter: number): number {
   const bld = G.bld;
   const s = sim.solver;
   const np = G.pieces.length;
   if (np === 0) return 0;
-  s.solve(bld.graph, bld.alive, bld.bondAlive, G.pieces, np, gx, gy, gz, G.fixed, bld.srcStamp, sim.step, useExt ? bld.ext : null, strengthScale, true);
-  const n = s.frontier(1);
-  for (let k = 0; k < n; k++) killBond(sim, bld, s.over[k]);
+  const res = s.solve(bld.graph, bld.alive, bld.bondAlive, G.pieces, np, gx, gy, gz, G.fixed, bld.srcStamp, sim.step, useExt ? bld.ext : null, strengthScale, bld.disp, maxIter, SOLVE_TOL);
+  // A fixed group can wait for its solve to finish over the next steps. A loose body's load is a
+  // transient (a landing lasts a step or two), so a nearly converged answer now beats none.
+  if (sim.trace && !G.fixed) sim.trace(`solve g${G.id} ${np}p k=(${gx.toFixed(1)},${gy.toFixed(1)},${gz.toFixed(1)}) it ${res.iterations} res ${res.residual.toExponential(1)} max ${s.maxUtil.toFixed(2)} bonds ${s.nBonds}`);
+  if (!res.converged && (G.fixed || res.residual > LOOSE_TOL)) return -1;
+  const n = s.selectBreaks();
+  const g = bld.graph;
+  sim.crushEnergy = 0;
+  for (let k = 0; k < n; k++) {
+    const b = s.over[k];
+    if (!bld.bondAlive[b]) continue;
+    if (s.crush[b] >= CRUSH_FRACTION) {
+      // Compressive failure crushes the member: the lighter of the two pieces (the column or wall,
+      // not the slab it carries; always the piece for a ground bond) breaks up into rubble, and
+      // whatever it held drops onto what is left.
+      const a = g.ba[b], c = g.bb[b];
+      const victim = c < 0 || g.mass[a] <= g.mass[c] ? a : c;
+      if (!bld.alive[victim]) continue;
+      // work done crushing it: the bond's capacity over the member's length along the load
+      const ax = Math.abs(g.dir[b * 3]) > 0.5 ? 0 : Math.abs(g.dir[b * 3 + 1]) > 0.5 ? 1 : 2;
+      sim.crushEnergy += config.destruction.crushWork * g.fcap[b] * strengthScale * 2 * g.pieces[victim].halfExtents[ax];
+      sim.crushedTotal++;
+      destroyPiece(sim, bld, victim, _zero3, true);
+    } else {
+      killBond(sim, bld, b);
+    }
+  }
   return n;
 }
+
+/** Bonds that fail with at least this fraction of their load in compression crush a piece. */
+const CRUSH_FRACTION = 0.5;
+const _zero3 = new Float64Array(3);
+
+/** Relative residual at which a stress solve counts as converged. */
+export const SOLVE_TOL = 1e-4;
+/** Residual a loose (landing) body's solve may stop at and still be acted on. */
+const LOOSE_TOL = 0.02;
 
 export function gravityInFrame(G: Group, wx: number, wy: number, wz: number): Float64Array {
   // building frame == body frame; world -> body: inverse rotation
