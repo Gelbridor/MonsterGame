@@ -12,6 +12,12 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
     antialias: true,
     maxActiveChunks: 1500,
     maxParticles: 20000,
+    cascadedShadows: true,
+    post: { enabled: true, bloom: true, ao: true, ssr: true, aa: 'traa', filmic: true, effectScale: 1 },
+    maxDynamicLights: 48,
+    rainDrops: 24000,
+    materialDetail: 2,
+    geometryDetail: 2,
   },
   high: {
     level: 'high',
@@ -21,6 +27,12 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
     antialias: true,
     maxActiveChunks: 800,
     maxParticles: 10000,
+    cascadedShadows: true,
+    post: { enabled: true, bloom: true, ao: true, ssr: true, aa: 'smaa', filmic: true, effectScale: 0.5 },
+    maxDynamicLights: 24,
+    rainDrops: 12000,
+    materialDetail: 2,
+    geometryDetail: 2,
   },
   // Phone tier: monster-only shadows, no MSAA.
   medium: {
@@ -31,6 +43,12 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
     antialias: false,
     maxActiveChunks: 300,
     maxParticles: 3000,
+    cascadedShadows: false,
+    post: { enabled: true, bloom: true, ao: false, ssr: false, aa: 'fxaa', filmic: true, effectScale: 0.5 },
+    maxDynamicLights: 8,
+    rainDrops: 4000,
+    materialDetail: 1,
+    geometryDetail: 1,
   },
   // Weak phones: no shadow maps at all (blob shadows come later).
   low: {
@@ -41,6 +59,12 @@ export const QUALITY_PRESETS: Record<QualityLevel, QualityPreset> = {
     antialias: false,
     maxActiveChunks: 150,
     maxParticles: 1000,
+    cascadedShadows: false,
+    post: { enabled: false, bloom: false, ao: false, ssr: false, aa: 'none', filmic: false, effectScale: 0.5 },
+    maxDynamicLights: 4,
+    rainDrops: 1500,
+    materialDetail: 1,
+    geometryDetail: 0,
   },
 };
 
