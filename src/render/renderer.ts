@@ -24,6 +24,17 @@ const CSM_FAR = 400;
 const MOON_GAIN = 0.7;
 const HEMI_GAIN = 0.05;
 
+function wantsWebGPU(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.has('webgpu') || params.get('backend') === 'webgpu';
+}
+
+/** Set by main.ts from the GPU class: start on WebGL 2 for integrated / low-power GPUs. ?webgpu / ?webgl always win. */
+let preferWebGL = false;
+export function setBackendPreference(webgl: boolean): void {
+  preferWebGL = webgl;
+}
+
 function wantsForcedWebGL(): boolean {
   const params = new URLSearchParams(window.location.search);
   return params.has('webgl') || params.get('backend') === 'webgl';
@@ -41,7 +52,8 @@ function safeDispose(r: THREE.WebGPURenderer): void {
 async function initRenderer(
   quality: QualityPreset,
 ): Promise<{ renderer: THREE.WebGPURenderer; backend: RenderBackend }> {
-  let forceWebGL = wantsForcedWebGL() || !(navigator as Navigator & { gpu?: unknown }).gpu;
+  let forceWebGL =
+    wantsForcedWebGL() || !(navigator as Navigator & { gpu?: unknown }).gpu || (preferWebGL && !wantsWebGPU());
   let lastError: unknown;
 
   // Attempt 1: as requested. Attempt 2 (only if attempt 1 wasn't already WebGL): force WebGL 2.
@@ -214,10 +226,13 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
   }
 
   // ---- sizing
+  // Dynamic resolution: the pipeline's targets follow the renderer's pixel ratio, so scaling it scales everything.
+  let appliedScale = -1;
   function resize(): void {
     const w = Math.max(1, container.clientWidth || window.innerWidth);
     const h = Math.max(1, container.clientHeight || window.innerHeight);
-    const ratio = Math.min(window.devicePixelRatio || 1, quality.pixelRatio, config.render.maxPixelRatio);
+    appliedScale = config.render.renderScale;
+    const ratio = Math.min(window.devicePixelRatio || 1, quality.pixelRatio, config.render.maxPixelRatio) * appliedScale;
     renderer.setPixelRatio(ratio);
     renderer.setSize(w, h);
     camera.aspect = w / h;
@@ -241,6 +256,7 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
     sun,
     render(): void {
       if (disposed) return;
+      if (config.render.renderScale !== appliedScale) resize();
       // Re-read tunables so the debug panel can change them live.
       renderer.toneMappingExposure = config.render.exposure;
       scene.environmentIntensity = config.render.envIntensity * 0.5;

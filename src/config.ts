@@ -70,6 +70,8 @@ export const config = {
   render: {
     /** Cap on devicePixelRatio. Overridden by the quality preset at start-up. */
     maxPixelRatio: 2,
+    /** Render-resolution scale (0.5..1) on top of the pixel ratio. Moved at run time by dynamic resolution. */
+    renderScale: 1,
     /** Fog density for the night haze. */
     fogDensity: 0.0028,
     /** Tone mapping exposure. */
@@ -144,6 +146,41 @@ export const config = {
     deadZone: 0.15,
     /** Virtual joystick radius on touch screens (CSS px). */
     touchStickRadius: 60,
+  },
+
+  quality: {
+    /** Lower the quality tier automatically (one step, then reload) when the frame rate stays too low. */
+    autoStepDown: true,
+    /** Seconds after the loop starts to ignore (shader compiles, first-frame hitches). */
+    startupIgnoreS: 3,
+    /** Length (s) of the rolling window of frame times that is judged. */
+    windowS: 4,
+    /** Which percentile of frame time in the window is judged (0.8 = the slowest 20% of frames are ignored as spikes). */
+    percentile: 0.8,
+    /** Minimum seconds between two automatic step-downs. */
+    cooldownS: 20,
+    /** Step down from Ultra / High when the judged frame rate is below this. */
+    minFpsHigh: 50,
+    /** Dynamic resolution: lower render scale before lowering the tier. */
+    dynamicRes: true,
+    /** Seconds between dynamic-resolution decisions (judged on the last interval's frames). */
+    scaleIntervalS: 2,
+    /** Render scale lowered by this much when too slow. */
+    scaleDown: 0.1,
+    /** Render scale raised by this much when comfortably fast. */
+    scaleUp: 0.05,
+    /** Lowest render scale; only when at this floor and still slow does the tier step down. */
+    scaleMin: 0.5,
+    /** Raise the scale only when fps exceeds target x this factor (keep it above 1 so it cannot flap). */
+    raiseFactor: 1.15,
+    /** Render scale to start with on integrated / previously stepped-down machines. */
+    startScaleWeak: 0.75,
+    /** Low tier fps target (dynamic resolution only; there is no lower tier). */
+    minFpsLow: 24,
+    /** Step down from Medium when the judged frame rate is below this. */
+    minFpsMedium: 28,
+    /** Seconds the "Quality lowered" toast stays after the reload. */
+    toastS: 3,
   },
 
   debug: {
