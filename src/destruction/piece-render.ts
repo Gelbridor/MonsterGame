@@ -22,6 +22,7 @@
 // ignores it.
 
 import * as THREE from 'three/webgpu';
+import { color as tslColor, float as tslFloat, frontFacing, select as tslSelect } from 'three/tsl';
 import type { QualityPreset } from '../core/types';
 import { boxGeo, fractureBox, type FractureGeo } from './fracture';
 import { createPieceMaterials, lookFor, type Look } from './piece-materials';
@@ -127,6 +128,10 @@ interface PieceState {
   rest: Float64Array;
   /** Rest box in building-local space: centre then half extents. */
   box: Float64Array;
+  /** Slab / column / beam: shown (inset) as interior structure once the building has a hole. */
+  structural: boolean;
+  /** Visible as interior structure without having taken over town triangles. */
+  shown: boolean;
   /** Town triangles that belong to this piece (meshIdx * TRI_MESH + index offset), filled lazily. */
   tris: number[];
 }
@@ -139,6 +144,7 @@ interface WokenBuilding {
   sn: number;
   pieces: PieceState[];
   assigned: boolean;
+  interior: boolean;
 }
 
 /** Index offsets stay below this inside one merged mesh. */
@@ -260,6 +266,23 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   function hideBuilding(specId: number): void {
     if (hidden.has(specId) || woken.has(specId)) return;
     pendingWake.add(specId);
+  }
+
+  /** Back faces seen through a hole are the room's inside: dark, with dim window light. One clone per town material. */
+  const interiorMats = new Map<THREE.Material, THREE.Material>();
+  function interiorMaterial(m: THREE.Material): THREE.Material {
+    let c = interiorMats.get(m);
+    if (c) return c;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nm = m.clone() as any;
+    nm.side = THREE.DoubleSide;
+    const dark = tslSelect(frontFacing, tslFloat(1), tslFloat(0.2));
+    nm.colorNode = (nm.colorNode ?? tslColor(nm.color ?? 0x808080)).mul(dark);
+    if (nm.emissiveNode) nm.emissiveNode = nm.emissiveNode.mul(tslSelect(frontFacing, tslFloat(1), tslFloat(0.2)));
+    nm.needsUpdate = true;
+    c = nm as THREE.Material;
+    interiorMats.set(m, c);
+    return c;
   }
 
   /** Distinct, sorted box-face coordinates per local axis: the planes the town triangles are cut on. */
@@ -414,7 +437,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
       g.setIndex(new THREE.BufferAttribute(idx, 1));
       g.computeBoundingSphere();
       g.computeBoundingBox();
-      const m = new THREE.Mesh(g, src.material);
+      const m = new THREE.Mesh(g, interiorMaterial(src.material as THREE.Material));
       m.name = `${src.name}-woken${b.specId}`;
       m.userData = src.userData;
       m.castShadow = src.castShadow;
@@ -445,6 +468,24 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     }
     ps.tris.length = 0;
     if (h.batch) h.batch.mesh.setVisibleAt(h.inst, true);
+    if (!ps.bld.interior) showInterior(ps.bld);
+  }
+
+  /** The building has a hole now: reveal its slabs / columns / beams so you do not see straight through it. */
+  function showInterior(b: WokenBuilding): void {
+    b.interior = true;
+    for (const p of b.pieces) {
+      if (!p || !p.structural || p.activated || p.shown || p.handle < 0) continue;
+      const hd = handles[p.handle];
+      if (!hd || !hd.alive || !hd.batch) continue;
+      p.shown = true;
+      const o = p.handle * 7;
+      scratchP.set(tr[o], tr[o + 1], tr[o + 2]);
+      scratchQ.set(tr[o + 3], tr[o + 4], tr[o + 5], tr[o + 6]);
+      scratchM.compose(scratchP, scratchQ, scratchS);
+      hd.batch.mesh.setMatrixAt(hd.inst, scratchM);
+      hd.batch.mesh.setVisibleAt(hd.inst, true);
+    }
   }
 
   function showRest(id: number, h: Handle, ps: PieceState): void {
@@ -594,13 +635,16 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
 
   function addPiece(graph: BuildingGraph, piece: PieceDef): RenderHandle {
     const e = piece.halfExtents;
-    const data = buildGeoData(boxGeo(e[0], e[1], e[2]), piece);
+    const structural = piece.kind === 'slab' || piece.kind === 'column' || piece.kind === 'beam';
     let pc: PieceState | null = null;
+    // Interior structure is drawn 2 cm smaller so faces flush with the facade do not z-fight it.
+    const inset = structural && (pendingWake.has(graph.specId) || woken.has(graph.specId)) ? 0.02 : 0;
+    const data = buildGeoData(boxGeo(Math.max(0.01, e[0] - inset), Math.max(0.01, e[1] - inset), Math.max(0.01, e[2] - inset)), piece);
     if (pendingWake.has(graph.specId) || woken.has(graph.specId)) {
       let b = woken.get(graph.specId);
       if (!b) {
         pendingWake.delete(graph.specId);
-        b = { specId: graph.specId, x: graph.x, z: graph.z, cs: Math.cos(graph.yaw), sn: Math.sin(graph.yaw), pieces: [], assigned: false };
+        b = { specId: graph.specId, x: graph.x, z: graph.z, cs: Math.cos(graph.yaw), sn: Math.sin(graph.yaw), pieces: [], assigned: false, interior: false };
         woken.set(graph.specId, b);
       }
       const c = piece.center;
@@ -612,7 +656,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
           0, Math.sin(half), 0, Math.cos(half),
         ),
         box: Float64Array.of(c[0], c[1], c[2], e[0], e[1], e[2]),
-        tris: [],
+        tris: [], structural, shown: false,
       };
       b.pieces[piece.index] = pc;
     }
