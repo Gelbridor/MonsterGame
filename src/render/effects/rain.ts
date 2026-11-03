@@ -27,8 +27,8 @@ const LEAD = 26;
 /** Drop fall speed (m/s). */
 const FALL = 9.5;
 /** Cinematic streak length / width in metres. */
-const STREAK_LEN = 1.5;
-const STREAK_W = 0.011;
+const STREAK_LEN = 1.1;
+const STREAK_W = 0.006;
 
 /** Moon / sky ambient term on the drops (linear). */
 const AMBIENT = new THREE.Color(0.10, 0.13, 0.21);
@@ -77,7 +77,7 @@ export function createRain(
   const uAmbient = uniform(AMBIENT.clone());
   const uIntensity = uniform(1);
   const uCols = uniform(800);
-  const uLampBoost = uniform(4);
+  const uLampBoost = uniform(10);
 
   // How many lamps this tier lights rain with.
   const lampCount = quality.level === 'low' ? 4 : quality.level === 'medium' ? 6 : quality.level === 'high' ? 10 : 12;
@@ -118,19 +118,19 @@ export function createRain(
 
     const len = max(float(STREAK_LEN).mul(r(6).mul(0.7).add(0.7)), dist.mul(uPx).mul(7));
     const w0 = float(STREAK_W).mul(r(7).mul(0.6).add(0.7));
-    const wd = max(w0, dist.mul(uPx).mul(1.25)).toVar('rainW');
+    const wd = max(w0, dist.mul(uPx).mul(0.9)).toVar('rainW');
 
     const q = uv();
     nearMat.positionNode = P.add(d.mul(q.y.sub(0.5).mul(len))).add(right.mul(q.x.sub(0.5).mul(wd)));
 
     // ---- per-drop opacity
-    const nearFade = smoothstep(1.5, 8.0, dist);
+    const nearFade = smoothstep(7.0, 18.0, dist);
     const edge = float(1).sub(smoothstep(0.72, 1.0, max(abs(rx), abs(rz)).div(BOX / 2)));
     const yFade = smoothstep(len.mul(0.5), len.mul(0.5).add(0.8), py).mul(float(1).sub(smoothstep(BOX_Y - 12, BOX_Y, py)));
     const thin = clamp(w0.div(wd), 0.35, 1.0);
     const fogAtt = exp(dist.mul(uFog).mul(dist.mul(uFog)).negate());
     const skyCut = float(1).sub(smoothstep(0.0, 0.35, V.y).mul(0.3));
-    const alpha = skyCut.mul(nearFade).mul(edge).mul(yFade).mul(thin).mul(fogAtt).mul(uIntensity).mul(0.42);
+    const alpha = skyCut.mul(nearFade).mul(edge).mul(yFade).mul(thin).mul(fogAtt).mul(uIntensity).mul(0.16);
 
     // ---- per-drop light (vertex stage, shared by the 4 corners)
     const lamp = weatherLamps.light(P, V, { lamps: lampCount, r0: 7, forward: 3.0 }).mul(uLampBoost);
@@ -208,7 +208,7 @@ export function createRain(
 
       const aFade = smoothstep(0, 14, vW.y).mul(float(1).sub(smoothstep(SHEET_H - 40, SHEET_H - 10, vW.y)));
       const fogAtt = exp(vR.mul(uFog).mul(vR).mul(uFog).negate());
-      const a = across.mul(along).mul(present).mul(aFade).mul(fogAtt).mul(uIntensity).mul(0.2);
+      const a = across.mul(along).mul(present).mul(aFade).mul(fogAtt).mul(uIntensity).mul(0.07);
       Discard(a.lessThan(0.004));
       const V = normalize(d);
       const lamp = weatherLamps.light(vW, V, { lamps: Math.min(lampCount, 6), r0: 9, forward: 3.0, reach: 90 });
