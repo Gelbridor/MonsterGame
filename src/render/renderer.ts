@@ -63,8 +63,24 @@ async function initRenderer(
   );
 }
 
+/**
+ * Reload once with the WebGL 2 backend forced. Used when WebGPU initialised
+ * but then failed (device lost, or render calls throwing), which otherwise
+ * leaves a blank canvas. `?webgl` in the URL prevents a reload loop.
+ */
+export function reloadWithWebGL(reason: unknown): void {
+  if (wantsForcedWebGL()) return;
+  console.warn('[renderer] WebGPU failed after start-up, reloading with WebGL 2', reason);
+  const url = new URL(window.location.href);
+  url.searchParams.set('webgl', '');
+  window.location.replace(url.toString());
+}
+
 export async function createRenderer(container: HTMLElement, quality: QualityPreset): Promise<RenderContext> {
   const { renderer, backend } = await initRenderer(quality);
+  if (backend === 'webgpu') {
+    renderer.onDeviceLost = (info) => reloadWithWebGL(info);
+  }
 
   // ---- renderer settings
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -181,7 +197,12 @@ export async function createRenderer(container: HTMLElement, quality: QualityPre
         camera.far = config.camera.far;
         camera.updateProjectionMatrix();
       }
-      renderer.render(scene, camera);
+      try {
+        renderer.render(scene, camera);
+      } catch (err) {
+        if (backend === 'webgpu') reloadWithWebGL(err);
+        else throw err;
+      }
     },
     setShadowFocus,
     info() {

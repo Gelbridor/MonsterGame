@@ -181,10 +181,7 @@ export function createBasalt(scene: THREE.Scene, physics: Physics, spawn: THREE.
     speed += Math.max(-rate * dt, Math.min(rate * dt, dv));
 
     // Vertical: gravity while airborne.
-    // Keep a small downward push while grounded so the controller keeps
-    // detecting the ground every tick (zero vertical movement makes
-    // computedGrounded() flicker).
-    if (grounded) verticalVel = -2;
+    if (grounded) verticalVel = 0;
     else verticalVel -= config.physics.gravity * config.physics.gravityScale * dt;
 
     desired.set(-Math.sin(heading) * speed * dt, verticalVel * dt, -Math.cos(heading) * speed * dt);

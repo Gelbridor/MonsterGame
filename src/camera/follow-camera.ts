@@ -100,7 +100,10 @@ export function createFollowCamera(camera: THREE.PerspectiveCamera): FollowCamer
       // --- position: behind (relative to yaw) and above.
       // PHASE-2 HOOK: pull-back on collapses (scale `dist`), screen shake (add an
       // offset to the final position / look-at) and slow-motion FOV punch go here.
-      const dist = c.distance;
+      // Portrait screens (phones) have a narrow horizontal view, so pull back
+      // to keep the same sense of scale as landscape.
+      const portrait = camera.aspect < 1 ? Math.min(1.7, Math.pow(1 / camera.aspect, 0.6)) : 1;
+      const dist = c.distance * portrait;
       const cosP = Math.cos(pitch);
       const sinP = Math.sin(pitch);
       const fx = -Math.sin(yaw);

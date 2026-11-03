@@ -8,7 +8,7 @@ import { config } from './config';
 import { createLoop } from './core/loop';
 import { createInput } from './core/input';
 import { detectQuality, getQualityPreset } from './core/quality';
-import { createRenderer, applyShadowFlags } from './render/renderer';
+import { createRenderer, applyShadowFlags, reloadWithWebGL } from './render/renderer';
 import { createPhysics } from './physics/world';
 import { buildTown } from './city/town-layout';
 import { createBasalt } from './monster/basalt';
@@ -26,6 +26,18 @@ async function start() {
 
   // Renderer and physics initialise in parallel (WebGPU adapter + Rapier wasm).
   const [ctx, physics] = await Promise.all([createRenderer(container, quality), createPhysics()]);
+
+  // WebGPU errors after start-up arrive as uncaught async errors, not from
+  // render(). If one hits, fall back to WebGL 2 instead of a blank canvas.
+  if (ctx.backend === 'webgpu') {
+    const isGpuError = (e: unknown) => /GPU|WebGPU|createBuffer|Instance dropped/i.test(String(e));
+    window.addEventListener('error', (ev) => {
+      if (isGpuError(ev.message)) reloadWithWebGL(ev.message);
+    });
+    window.addEventListener('unhandledrejection', (ev) => {
+      if (isGpuError(ev.reason)) reloadWithWebGL(ev.reason);
+    });
+  }
 
   const town = buildTown(ctx.scene, physics);
   town.group.traverse((o) => {
