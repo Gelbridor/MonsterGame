@@ -50,8 +50,10 @@ const IMPACT_J_PER_KG_HEALTH = 0.85;
 const WAKE_ENERGY = 4e4;
 /** Largest apparent-gravity multiple a falling group can feel. */
 const MAX_K = 150;
-/** Most CG iterations one solve may use in one step. */
-const MAX_ITER_PER_SOLVE = 400;
+/** Share of the step's solver budget one solve may take (so one big building cannot starve the rest). */
+const MAX_SHARE_PER_SOLVE = 0.6;
+/** Extra solver work per step for landing bodies (apparent gravity above 3 g), as a multiple of the budget. */
+const IMPACT_BUDGET = 2;
 
 export function createDestruction(opts: DestructionOptions): DestructionSystem {
   const { physics, renderer, specs, quality } = opts;
@@ -239,8 +241,11 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
 
     const groups = sim.groups;
     const n = groups.length;
-    /** CG iterations left for this step's stress solves (unfinished solves resume next step). */
-    let budget = config.destruction.solverItersPerStep;
+    /** Solver work (CG iterations x bonds) left this step; unfinished solves resume next step. */
+    const budget0 = config.destruction.solverWorkPerStep * quality.solverWorkScale;
+    let budget = budget0;
+    /** Landings are one-step transients that cannot wait for a later step: their own allowance. */
+    let impactBudget = budget0 * IMPACT_BUDGET;
     for (let k = 0; k < n; k++) {
       const G = groups[k];
       if (!G.live) continue;
@@ -249,9 +254,9 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
         if (G.dirty || G.hitStep === sim.step) {
           const useExt = G.hitStep === sim.step;
           if (budget > 0) {
-            const before = sim.solver.itersRun;
-            const broke = solveGroup(sim, G, 0, -sim.g, 0, scale, useExt, Math.min(budget, MAX_ITER_PER_SOLVE));
-            budget -= sim.solver.itersRun - before;
+            const before = sim.solver.workRun;
+            const broke = solveGroup(sim, G, 0, -sim.g, 0, scale, useExt, Math.min(budget, budget0 * MAX_SHARE_PER_SOLVE));
+            budget -= sim.solver.workRun - before;
             // unconverged (-1): stay dirty, the warm start resumes next step; broke > 0: re-solve
             G.dirty = broke !== 0;
           } else {
@@ -286,12 +291,14 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
         const extRatio = Math.sqrt(ext2) / (G.mass * sim.g);
         if (G.pieces.length === 1) {
           crushLoosePiece(G, Math.sqrt(ext2), scale);
-        } else if ((kfac > 1.3 || extRatio > 0.3 || (sim.step + G.id) % 4 === 0) && budget > 0) {
+        } else if ((kfac > 1.3 || extRatio > 0.3 || (sim.step + G.id) % 4 === 0) && (budget > 0 || (kfac > 3 && impactBudget > 0))) {
           const gl = gravityInFrame(G, wx, wy, wz);
-          const before = sim.solver.itersRun;
+          const before = sim.solver.workRun;
           sim.crushEnergy = 0;
-          solveGroup(sim, G, gl[0], gl[1], gl[2], scale, true, Math.min(budget, MAX_ITER_PER_SOLVE));
-          budget -= sim.solver.itersRun - before;
+          const landing = kfac > 3 && impactBudget > 0;
+          solveGroup(sim, G, gl[0], gl[1], gl[2], scale, true, landing ? impactBudget : Math.min(budget, budget0 * MAX_SHARE_PER_SOLVE));
+          if (landing) impactBudget -= sim.solver.workRun - before;
+          else budget -= sim.solver.workRun - before;
           if (sim.crushEnergy > 0 && G.live) {
             // The members that stopped this body were crushed: they could not stop it. It keeps
             // the momentum it had before the contact, less the work done crushing them.

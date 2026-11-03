@@ -78,7 +78,7 @@ function dumpUtil(env: Env, specId: number, top = 8): void {
   const g = b.graph;
   s.util.fill(0);
   const tS = performance.now();
-  const res = s.solve(g, b.alive, b.bondAlive, G.pieces, G.pieces.length, 0, -9.81, 0, true, null, 0, null, config.destruction.bondStrengthScale, null, 4000, 1e-6);
+  const res = s.solve(g, b.alive, b.bondAlive, G.pieces, G.pieces.length, 0, -9.81, 0, true, null, 0, null, config.destruction.bondStrengthScale, null, 1e9, 1e-6);
   const tE = performance.now() - tS;
   console.log(`  cold solve: ${res.iterations} iterations in ${fmt(tE, 2)} ms, residual ${res.residual.toExponential(1)}, max util ${fmt(s.maxUtil, 2)}`);
   const arr: Array<[number, number]> = [];
@@ -291,9 +291,35 @@ async function t0(): Promise<void> {
   console.log(`woken: median ${fmt(median(tm.physArr), 3)} ms/step (p95 ${fmt(pct(tm.physArr, 0.95), 2)}); bodies ${env.physics.stats().bodies} colliders ${env.physics.stats().colliders} active ${env.physics.stats().activeBodies}`);
 }
 
+async function t5(): Promise<void> {
+  console.log('\n=== TEST 5: stress solve cost (repeat cold solves) ===');
+  const env = await setup((process.env.LEVEL as QualityLevel) || 'high');
+  for (const type of ['tower', 'terrace', 'office', 'townHall']) {
+    const spec = env.layout.specs.find((s) => s.type === type);
+    if (!spec) continue;
+    const b = env.d.wakeBuilding(spec.id)!;
+    const g = b.graph;
+    let G: Group | null = null;
+    for (const x of env.d.sim.groups) if (x.bld === b && x.fixed && (!G || x.pieces.length > G.pieces.length)) G = x;
+    if (!G) continue;
+    const s = env.d.sim.solver;
+    const times: number[] = [];
+    let it = 0;
+    for (let k = 0; k < 30; k++) {
+      const t0 = performance.now();
+      const r = s.solve(g, b.alive, b.bondAlive, G.pieces, G.pieces.length, 0, -9.81, 0, true, null, 0, null, 1, null, 1e9, 1e-4);
+      times.push(performance.now() - t0);
+      it = r.iterations;
+    }
+    const med = median(times.slice(5));
+    console.log(`${type}: ${g.pieces.length}p/${g.bonds.length}b, ${it} it, median ${fmt(med, 3)} ms/solve = ${fmt((med * 1e6) / (it * (g.bonds.length + g.pieces.length)), 0)} ns per bond-iteration (first ${fmt(times[0], 2)} ms)`);
+  }
+}
+
 const which = process.argv[2] ?? 'all';
 (async () => {
   if (which === 't0') await t0();
+  if (which === 't5') await t5();
   if (which === 't1' || which === 'all') await t1();
   if (which === 't2' || which === 'all') await t2();
   if (which === 't3' || which === 'all') await t3();

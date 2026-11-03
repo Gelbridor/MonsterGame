@@ -37,7 +37,7 @@ export function designBonds(G: GenGraph): number {
   const bAlive = new Uint8Array(nb).fill(1);
   const list = new Int32Array(np);
   for (let i = 0; i < np; i++) list[i] = i;
-  const res = designSolver.solve(G, pAlive, bAlive, list, np, 0, -9.81, 0, true, null, 0, null, 1, null, 4000, 1e-7);
+  const res = designSolver.solve(G, pAlive, bAlive, list, np, 0, -9.81, 0, true, null, 0, null, 1, null, 1e9, 1e-7);
   for (let k = 0; k < designSolver.nBonds; k++) {
     const b = designSolver.bonds[k];
     const u = designSolver.util[b];
@@ -482,14 +482,14 @@ const _gl = new Float64Array(3);
 /**
  * Solve the group's bond loads and break the overloaded ones.
  * (gx,gy,gz): apparent gravity in the building frame. Returns the number of bonds broken, or -1 if
- * the solve did not converge within `maxIter` (the warm start keeps the progress; call again).
+ * the solve did not converge within `maxWork` (the warm start keeps the progress; call again).
  */
-export function solveGroup(sim: Sim, G: Group, gx: number, gy: number, gz: number, strengthScale: number, useExt: boolean, maxIter: number): number {
+export function solveGroup(sim: Sim, G: Group, gx: number, gy: number, gz: number, strengthScale: number, useExt: boolean, maxWork: number): number {
   const bld = G.bld;
   const s = sim.solver;
   const np = G.pieces.length;
   if (np === 0) return 0;
-  const res = s.solve(bld.graph, bld.alive, bld.bondAlive, G.pieces, np, gx, gy, gz, G.fixed, bld.srcStamp, sim.step, useExt ? bld.ext : null, strengthScale, bld.disp, maxIter, SOLVE_TOL);
+  const res = s.solve(bld.graph, bld.alive, bld.bondAlive, G.pieces, np, gx, gy, gz, G.fixed, bld.srcStamp, sim.step, useExt ? bld.ext : null, strengthScale, bld.disp, maxWork, G.fixed ? SOLVE_TOL : LOOSE_TOL * 0.25);
   // A fixed group can wait for its solve to finish over the next steps. A loose body's load is a
   // transient (a landing lasts a step or two), so a nearly converged answer now beats none.
   if (sim.trace && !G.fixed) sim.trace(`solve g${G.id} ${np}p k=(${gx.toFixed(1)},${gy.toFixed(1)},${gz.toFixed(1)}) it ${res.iterations} res ${res.residual.toExponential(1)} max ${s.maxUtil.toFixed(2)} bonds ${s.nBonds}`);

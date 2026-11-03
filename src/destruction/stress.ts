@@ -35,6 +35,10 @@ const SHEAR_RATIO = 0.4;
 const CLADDING_STIFFNESS = 0.03;
 /** Translational / rotational stiffness of a contact support (a landing body's contact pieces). */
 const PIN_K = 3e10;
+/** Most rigid aggregates in the coarse level of the preconditioner (6 coarse unknowns each). */
+const MAX_AGG = 24;
+/** Height band (m) of one coarse aggregate. */
+const STOREY_BAND = 3;
 
 /** Static per-graph stiffness data (building frame is constant, so this never changes). */
 interface Prep {
@@ -45,6 +49,9 @@ interface Prep {
   kt: Float64Array;
   kb: Float64Array;
   kq: Float64Array;
+  /** Coarse aggregate key of each piece (storey band x horizontal bin), and the key count. */
+  aggKey: Int32Array;
+  nKeys: number;
 }
 const preps = new WeakMap<GenGraph, Prep>();
 
@@ -55,6 +62,7 @@ function prepare(G: GenGraph): Prep {
   p = {
     ra: new Float64Array(nb * 3), rb: new Float64Array(nb * 3),
     kn: new Float64Array(nb), kt: new Float64Array(nb), kb: new Float64Array(nb), kq: new Float64Array(nb),
+    aggKey: new Int32Array(0), nKeys: 0,
   };
   const { ba, bb, anchor, dir, cen, cladding, pieces } = G;
   for (let b = 0; b < nb; b++) {
@@ -80,12 +88,36 @@ function prepare(G: GenGraph): Prep {
     p.kb[b] = (f * E * (A * A) / 12) / L;
     p.kq[b] = (f * Gm * (A * A) / 6) / L;
   }
+  // Aggregates for the two-level preconditioner: pieces grouped by storey band (by height, so tall
+  // stacks such as a clock tower split too) and, along wide buildings, by horizontal bin, keeping
+  // the coarse problem at most MAX_AGG rigid bodies.
+  const np = G.pieces.length;
+  let ymax = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (let i = 0; i < np; i++) {
+    ymax = Math.max(ymax, cen[i * 3 + 1]);
+    x0 = Math.min(x0, cen[i * 3]); x1 = Math.max(x1, cen[i * 3]);
+    z0 = Math.min(z0, cen[i * 3 + 2]); z1 = Math.max(z1, cen[i * 3 + 2]);
+  }
+  const ny = Math.max(1, Math.min(MAX_AGG, Math.ceil((ymax + 0.01) / STOREY_BAND)));
+  const alongX = x1 - x0 >= z1 - z0;
+  const L = Math.max(x1 - x0, z1 - z0);
+  const nh = Math.max(1, Math.min(Math.floor(MAX_AGG / ny), Math.ceil(L / 10)));
+  p.aggKey = new Int32Array(np);
+  for (let i = 0; i < np; i++) {
+    const yb = Math.min(ny - 1, Math.floor((cen[i * 3 + 1] / (ymax + 0.01)) * ny));
+    const h = alongX ? cen[i * 3] - x0 : cen[i * 3 + 2] - z0;
+    const hb = L > 0 ? Math.min(nh - 1, Math.floor((h / (L + 0.01)) * nh)) : 0;
+    p.aggKey[i] = yb * nh + hb;
+  }
+  p.nKeys = ny * nh;
   preps.set(G, p);
   return p;
 }
 
 export interface SolveResult {
   iterations: number;
+  /** Work done: iterations x bonds (the unit of the per-step solver budget). */
+  work: number;
   converged: boolean;
   /** Final relative residual |r| / |f|. */
   residual: number;
@@ -104,8 +136,10 @@ export class StressSolver {
   nBonds = 0;
   /** Highest utilisation of the last solve. */
   maxUtil = 0;
-  /** Total CG iterations run since the counter was last reset (for stats/budgets). */
+  /** Total CG iterations run since the counter was last reset (for stats). */
   itersRun = 0;
+  /** Total work (iterations x bonds) since the counter was last reset (for budgets). */
+  workRun = 0;
   /** Solves run since last reset. */
   solves = 0;
 
@@ -120,6 +154,15 @@ export class StressSolver {
   private f = new Float64Array(0);
   /** Cholesky factor (lower, row-major 6×6) of each node's diagonal block. */
   private blk = new Float64Array(0);
+  // ---- coarse level: rigid motions of aggregates
+  private agg = new Int32Array(0);
+  private keyAgg = new Int32Array(64);
+  private aggC = new Float64Array(MAX_AGG * 3);
+  private aggN = new Int32Array(MAX_AGG);
+  private nAgg = 0;
+  private Ac = new Float64Array(MAX_AGG * 6 * MAX_AGG * 6);
+  private rc = new Float64Array(MAX_AGG * 6);
+  private cenRef: Float64Array | null = null;
 
   ensure(np: number, nb: number): void {
     if (this.loc.length < np) {
@@ -134,6 +177,7 @@ export class StressSolver {
       this.q = new Float64Array(n * 6);
       this.f = new Float64Array(n * 6);
       this.blk = new Float64Array(n * 36);
+      this.agg = new Int32Array(n);
     }
     if (this.util.length < nb) {
       const n = Math.max(nb, 128);
@@ -151,13 +195,14 @@ export class StressSolver {
    * ground bonds; otherwise it is a loose body held by its contact pieces (srcStamp[i] === stamp).
    * `ext`: impact forces (N, building frame) per piece, or null. `warm`: per-piece 6-DOF solution
    * of this building from the last solve (read as the start point, written back), or null.
-   * Fills util[] for the solved bonds. Returns iteration count and convergence.
+   * Fills util[] for the solved bonds. `maxWork` caps iterations x (bonds + pieces). Returns
+   * iteration count, work and convergence.
    */
   solve(
     G: GenGraph, pAlive: Uint8Array, bAlive: Uint8Array, list: ArrayLike<number>, n: number,
     gx: number, gy: number, gz: number, fixed: boolean,
     srcStamp: Int32Array | null, stamp: number, ext: Float32Array | null, scale: number,
-    warm: Float64Array | null, maxIter: number, tol: number,
+    warm: Float64Array | null, maxWork: number, tol: number,
   ): SolveResult {
     this.ensure(G.pieces.length, G.bonds.length);
     const P = prepare(G);
@@ -193,7 +238,8 @@ export class StressSolver {
       }
     }
     this.nBonds = nbd;
-    const res: SolveResult = { iterations: 0, converged: true, residual: 0 };
+    const res: SolveResult = { iterations: 0, work: 0, converged: true, residual: 0 };
+    const maxIter = Math.max(2, Math.floor(maxWork / Math.max(1, nbd + nn)));
     this.maxUtil = 0;
     if (nn === 0 || !supported) {
       for (let k = 0; k < nn; k++) loc[nodes[k]] = -1;
@@ -218,8 +264,10 @@ export class StressSolver {
       return res;
     }
 
-    // ---- block-Jacobi preconditioner
+    // ---- preconditioner: block-Jacobi + rigid-aggregate coarse level
+    this.cenRef = G.cen;
     this.buildBlocks(G, P, nn, nbd);
+    this.buildCoarse(G, P, nn);
 
     // ---- PCG
     this.apply(G, P, x, q, nn, nbd);
@@ -264,8 +312,10 @@ export class StressSolver {
       }
     }
     this.itersRun += it;
+    this.workRun += (it + 2) * (nbd + nn);
     this.solves++;
     res.iterations = it;
+    res.work = (it + 2) * (nbd + nn);
     res.residual = Math.sqrt(rr) / fnorm;
     res.converged = rr <= tol2;
     if (warm) for (let k = 0; k < nn; k++) for (let d = 0; d < 6; d++) warm[nodes[k] * 6 + d] = x[k * 6 + d];
@@ -451,8 +501,115 @@ export class StressSolver {
     }
   }
 
-  /** z = M⁻¹ r with the factored blocks. */
+  /**
+   * Coarse level: every aggregate moves as a rigid body (u_i = U_A + Θ_A × (c_i − c_A), θ_i = Θ_A).
+   * Its stiffness Ac = Pᵀ K P is assembled exactly from the bonds that cross aggregates (bonds inside
+   * one aggregate are not strained by its rigid motion), then factored densely.
+   */
+  private buildCoarse(G: GenGraph, P: Prep, nn: number): void {
+    const { agg, aggC, aggN } = this;
+    if (this.keyAgg.length < P.nKeys) this.keyAgg = new Int32Array(P.nKeys);
+    const ka = this.keyAgg;
+    ka.fill(-1, 0, P.nKeys);
+    let na = 0;
+    aggC.fill(0); aggN.fill(0);
+    const cen = G.cen;
+    for (let k = 0; k < nn; k++) {
+      const i = this.nodes[k];
+      const key = P.aggKey[i];
+      let a = ka[key];
+      if (a < 0) { a = na++; ka[key] = a; }
+      agg[k] = a;
+      aggC[a * 3] += cen[i * 3]; aggC[a * 3 + 1] += cen[i * 3 + 1]; aggC[a * 3 + 2] += cen[i * 3 + 2];
+      aggN[a]++;
+    }
+    for (let a = 0; a < na; a++) { aggC[a * 3] /= aggN[a]; aggC[a * 3 + 1] /= aggN[a]; aggC[a * 3 + 2] /= aggN[a]; }
+    this.nAgg = na;
+    const nc = na * 6;
+    const Ac = this.Ac;
+    Ac.fill(0, 0, nc * nc);
+    const { ba, bb, anchor, dir } = G;
+    const loc = this.loc;
+    for (let k = 0; k < this.nBonds; k++) {
+      const b = this.bonds[k];
+      const A = agg[loc[ba[b]]];
+      const B = bb[b] >= 0 ? agg[loc[bb[b]]] : -1;
+      if (A === B) continue;
+      const ax = anchor[b * 3], ay = anchor[b * 3 + 1], az = anchor[b * 3 + 2];
+      const rax = ax - aggC[A * 3], ray = ay - aggC[A * 3 + 1], raz = az - aggC[A * 3 + 2];
+      const nx = dir[b * 3], ny = dir[b * 3 + 1], nz = dir[b * 3 + 2];
+      const kn = P.kn[b], kt = P.kt[b], kb = P.kb[b], kq = P.kq[b];
+      coarseBlock(Ac, nc, A, A, rax, ray, raz, rax, ray, raz, nx, ny, nz, kn, kt, kb, kq, 1);
+      if (B >= 0) {
+        const rbx = ax - aggC[B * 3], rby = ay - aggC[B * 3 + 1], rbz = az - aggC[B * 3 + 2];
+        coarseBlock(Ac, nc, B, B, rbx, rby, rbz, rbx, rby, rbz, nx, ny, nz, kn, kt, kb, kq, 1);
+        coarseBlock(Ac, nc, A, B, rax, ray, raz, rbx, rby, rbz, nx, ny, nz, kn, kt, kb, kq, -1);
+        coarseBlock(Ac, nc, B, A, rbx, rby, rbz, rax, ray, raz, nx, ny, nz, kn, kt, kb, kq, -1);
+      }
+    }
+    for (let k = 0; k < nn; k++) {
+      if (!this.pin[k]) continue;
+      const i = this.nodes[k], A = agg[k];
+      const dx = cen[i * 3] - aggC[A * 3], dy = cen[i * 3 + 1] - aggC[A * 3 + 1], dz = cen[i * 3 + 2] - aggC[A * 3 + 2];
+      coarseBlock(Ac, nc, A, A, dx, dy, dz, dx, dy, dz, 0, 1, 0, PIN_K, PIN_K, PIN_K, PIN_K, 1);
+    }
+    // dense Cholesky, lower triangle in place
+    let tr = 0;
+    for (let i = 0; i < nc; i++) tr += Ac[i * nc + i];
+    const eps = (tr / Math.max(1, nc)) * 1e-10 + 1e-6;
+    for (let i = 0; i < nc; i++) {
+      for (let j = 0; j <= i; j++) {
+        let sum = Ac[i * nc + j];
+        for (let m = 0; m < j; m++) sum -= Ac[i * nc + m] * Ac[j * nc + m];
+        if (i === j) Ac[i * nc + i] = Math.sqrt(Math.max(sum + eps, eps));
+        else Ac[i * nc + j] = sum / Ac[j * nc + j];
+      }
+    }
+  }
+
+  /** z = M⁻¹ r: block-Jacobi plus the coarse correction P Ac⁻¹ Pᵀ r (additive two-level). */
   private precond(r: Float64Array, z: Float64Array, nn: number): void {
+    this.precondBlocks(r, z, nn);
+    const na = this.nAgg, nc = na * 6;
+    if (na === 0) return;
+    const { rc, Ac, agg, aggC, nodes } = this;
+    const cen = this.cenRef!;
+    rc.fill(0, 0, nc);
+    // restriction: force sum and moment about each aggregate centre
+    for (let k = 0; k < nn; k++) {
+      const A = agg[k], a = A * 6, v = k * 6, i = nodes[k];
+      const dx = cen[i * 3] - aggC[A * 3], dy = cen[i * 3 + 1] - aggC[A * 3 + 1], dz = cen[i * 3 + 2] - aggC[A * 3 + 2];
+      const fx = r[v], fy = r[v + 1], fz = r[v + 2];
+      rc[a] += fx; rc[a + 1] += fy; rc[a + 2] += fz;
+      rc[a + 3] += r[v + 3] + dy * fz - dz * fy;
+      rc[a + 4] += r[v + 4] + dz * fx - dx * fz;
+      rc[a + 5] += r[v + 5] + dx * fy - dy * fx;
+    }
+    // Ac y = rc (factored)
+    for (let i = 0; i < nc; i++) {
+      let sum = rc[i];
+      for (let m = 0; m < i; m++) sum -= Ac[i * nc + m] * rc[m];
+      rc[i] = sum / Ac[i * nc + i];
+    }
+    for (let i = nc - 1; i >= 0; i--) {
+      let sum = rc[i];
+      for (let m = i + 1; m < nc; m++) sum -= Ac[m * nc + i] * rc[m];
+      rc[i] = sum / Ac[i * nc + i];
+    }
+    // prolongation
+    for (let k = 0; k < nn; k++) {
+      const A = agg[k], a = A * 6, v = k * 6, i = nodes[k];
+      const dx = cen[i * 3] - aggC[A * 3], dy = cen[i * 3 + 1] - aggC[A * 3 + 1], dz = cen[i * 3 + 2] - aggC[A * 3 + 2];
+      const tx = rc[a + 3], ty = rc[a + 4], tz = rc[a + 5];
+      z[v] += rc[a] + ty * dz - tz * dy;
+      z[v + 1] += rc[a + 1] + tz * dx - tx * dz;
+      z[v + 2] += rc[a + 2] + tx * dy - ty * dx;
+      z[v + 3] += tx; z[v + 4] += ty; z[v + 5] += tz;
+    }
+  }
+
+  /** z = (block diagonal)⁻¹ r with the factored blocks. */
+  private precondBlocks(r: Float64Array, z: Float64Array, nn: number): void {
     const blk = this.blk;
     for (let k = 0; k < nn; k++) {
       const o = k * 36, v = k * 6;
@@ -473,3 +630,46 @@ export class StressSolver {
 }
 
 const _Kt = new Float64Array(9), _Kr = new Float64Array(9), _S = new Float64Array(9), _KS = new Float64Array(9);
+
+/**
+ * Add sign x [[Kt, -Kt S2], [S1 Kt, -S1 Kt S2 + Kr]] (S = [r]x) to block (row aggregate A, column
+ * aggregate B) of the dense coarse matrix: the bond element between rigid bodies whose centres are
+ * r1 / r2 from the anchor. Diagonal blocks use r1 = r2.
+ */
+function coarseBlock(
+  Ac: Float64Array, nc: number, A: number, B: number,
+  r1x: number, r1y: number, r1z: number, r2x: number, r2y: number, r2z: number,
+  nx: number, ny: number, nz: number, kn: number, kt: number, kb: number, kq: number, sign: number,
+): void {
+  const n = _n3;
+  n[0] = nx; n[1] = ny; n[2] = nz;
+  const Kt = _Kt, Kr = _Kr, S1 = _S, S2 = _S2, KS = _KS, SK = _SK;
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+      const nn = n[i] * n[j];
+      const id = i === j ? 1 : 0;
+      Kt[i * 3 + j] = kt * id + (kn - kt) * nn;
+      Kr[i * 3 + j] = kb * id + (kq - kb) * nn;
+    }
+  }
+  S1[0] = 0; S1[1] = -r1z; S1[2] = r1y; S1[3] = r1z; S1[4] = 0; S1[5] = -r1x; S1[6] = -r1y; S1[7] = r1x; S1[8] = 0;
+  S2[0] = 0; S2[1] = -r2z; S2[2] = r2y; S2[3] = r2z; S2[4] = 0; S2[5] = -r2x; S2[6] = -r2y; S2[7] = r2x; S2[8] = 0;
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+    let a = 0, b = 0;
+    for (let m = 0; m < 3; m++) { a += Kt[i * 3 + m] * S2[m * 3 + j]; b += S1[i * 3 + m] * Kt[m * 3 + j]; }
+    KS[i * 3 + j] = a; // Kt S2
+    SK[i * 3 + j] = b; // S1 Kt
+  }
+  const r0 = A * 6, c0 = B * 6;
+  for (let i = 0; i < 3; i++) {
+    for (let j = 0; j < 3; j++) {
+      let sks = 0;
+      for (let m = 0; m < 3; m++) sks += S1[i * 3 + m] * KS[m * 3 + j];
+      Ac[(r0 + i) * nc + c0 + j] += sign * Kt[i * 3 + j];
+      Ac[(r0 + i) * nc + c0 + 3 + j] -= sign * KS[i * 3 + j];
+      Ac[(r0 + 3 + i) * nc + c0 + j] += sign * SK[i * 3 + j];
+      Ac[(r0 + 3 + i) * nc + c0 + 3 + j] += sign * (-sks + Kr[i * 3 + j]);
+    }
+  }
+}
+const _n3 = new Float64Array(3), _S2 = new Float64Array(9), _SK = new Float64Array(9);
