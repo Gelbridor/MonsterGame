@@ -236,7 +236,7 @@ async function main(): Promise<void> {
       const fr = R.fracture(p, 9);
       for (let k = 0; k < fr.shards.length && made < n; k++) {
         const h = R.addShard(p, fr, k);
-        if (h < 0) continue;
+        if (h < 0) return made; // renderer budget reached
         tmpV.set(bx + (rand() - 0.5) * 30, 0.3 + rand() * 6, bz + (rand() - 0.5) * 30);
         tmpQ.set(rand(), rand(), rand(), rand()).normalize();
         R.setTransform(h, tmpV, tmpQ);
