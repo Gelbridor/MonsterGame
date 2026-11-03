@@ -138,6 +138,10 @@ interface PieceState {
   shown: boolean;
   /** Town triangles that belong to this piece (meshIdx * TRI_MESH + index offset), filled lazily. */
   tris: number[];
+  /** Take-over requested while the building was still being prepared (shown or not). */
+  queued: boolean;
+  queueShow: boolean;
+  hd: Handle | null;
   /** Which town material parts the piece's triangles came from (VOTE_LOOKS order) and their summed tint. */
   votes: number[];
   ts: number[];
@@ -151,7 +155,11 @@ interface WokenBuilding {
   cs: number;
   sn: number;
   pieces: PieceState[];
+  /** Preparation (triangle cutting and assignment) is complete. */
   assigned: boolean;
+  prepStarted: boolean;
+  queue: PieceState[];
+  shardFix: Array<[Handle, PieceState]>;
   interior: boolean;
 }
 
@@ -333,17 +341,51 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   }
 
   /**
-   * First activation of a building: the town's triangles can be huge (a facade may be two), so they
-   * are cut on every piece-box plane into a private copy of the merged meshes, and each cut triangle
-   * is assigned to the piece whose box holds it. A break then removes only that piece's patch.
+   * Preparing a woken building: the town's triangles can be huge (a facade may be two), so they are cut
+   * on every piece-box plane into a private copy of the merged meshes, and each triangle is assigned to
+   * the piece whose box holds it. A break then removes only that piece's patch. Most triangles lie in one
+   * plane cell and are copied as they are; only the few that span planes are clipped. The work is a
+   * generator run in small slices from update() so it never stalls a frame; until it is done the town's
+   * own meshes stay visible and piece take-overs are queued.
    */
-  function prepareBuilding(b: WokenBuilding): void {
-    b.assigned = true;
+  const PREP_BUDGET_MS = 3;
+  const GRID_CELL = 3;
+  let prepDeadline = 0;
+  /** Looks a woken building will draw: their batches are created one per frame in update(), not at first use. */
+  const wantLooks = new Set<Look>();
+  const prepJobs: Array<{ b: WokenBuilding; gen: Generator<void, void, void> }> = [];
+
+  function* prepareGen(b: WokenBuilding): Generator<void, void, void> {
     const list = rangesByBuilding.get(b.specId);
     if (!list) return;
     const np = b.pieces.length;
     const bx = new Float64Array(np * 6);
-    for (let i = 0; i < np; i++) if (b.pieces[i]) bx.set(b.pieces[i].box, i * 6);
+    let lox = Infinity, loy = Infinity, loz = Infinity, hix = -Infinity, hiy = -Infinity, hiz = -Infinity;
+    for (let i = 0; i < np; i++) {
+      const ps = b.pieces[i];
+      if (!ps) continue;
+      bx.set(ps.box, i * 6);
+      lox = Math.min(lox, ps.box[0] - ps.box[3]); hix = Math.max(hix, ps.box[0] + ps.box[3]);
+      loy = Math.min(loy, ps.box[1] - ps.box[4]); hiy = Math.max(hiy, ps.box[1] + ps.box[4]);
+      loz = Math.min(loz, ps.box[2] - ps.box[5]); hiz = Math.max(hiz, ps.box[2] + ps.box[5]);
+    }
+    if (!isFinite(lox)) return;
+    lox -= ASSIGN_MAX; loy -= ASSIGN_MAX; loz -= ASSIGN_MAX; hix += ASSIGN_MAX; hiy += ASSIGN_MAX; hiz += ASSIGN_MAX;
+    // coarse grid: piece indices per cell (box grown by the assign distance), so a triangle only tests a few boxes
+    const gnx = Math.max(1, Math.ceil((hix - lox) / GRID_CELL)), gny = Math.max(1, Math.ceil((hiy - loy) / GRID_CELL)), gnz = Math.max(1, Math.ceil((hiz - loz) / GRID_CELL));
+    const cells: number[][] = new Array<number[]>(gnx * gny * gnz);
+    const cellIx = (v: number, lo: number, n: number): number => Math.min(n - 1, Math.max(0, Math.floor((v - lo) / GRID_CELL)));
+    for (let i = 0; i < np; i++) {
+      if (!b.pieces[i]) continue;
+      const o = i * 6;
+      const x0 = cellIx(bx[o] - bx[o + 3] - ASSIGN_MAX, lox, gnx), x1 = cellIx(bx[o] + bx[o + 3] + ASSIGN_MAX, lox, gnx);
+      const y0 = cellIx(bx[o + 1] - bx[o + 4] - ASSIGN_MAX, loy, gny), y1 = cellIx(bx[o + 1] + bx[o + 4] + ASSIGN_MAX, loy, gny);
+      const z0 = cellIx(bx[o + 2] - bx[o + 5] - ASSIGN_MAX, loz, gnz), z1 = cellIx(bx[o + 2] + bx[o + 5] + ASSIGN_MAX, loz, gnz);
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+        const k = (x * gny + y) * gnz + z;
+        (cells[k] ?? (cells[k] = [])).push(i);
+      }
+    }
     const planes = boxPlanes(b);
     const EPS = 1e-4;
     const byMesh = new Map<THREE.Mesh, Array<{ start: number; count: number }>>();
@@ -352,6 +394,19 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
       if (!l) byMesh.set(r.mesh, (l = []));
       l.push(r);
     }
+    const loc = new Float64Array(9);
+    const crosses = (ax: number, mn: number, mx: number): number => {
+      const pl = planes[ax];
+      let lo = 0, hi = pl.length;
+      while (lo < hi) {
+        const m = (lo + hi) >> 1;
+        if (pl[m] <= mn + EPS) lo = m + 1;
+        else hi = m;
+      }
+      return lo < pl.length && pl[lo] < mx - EPS ? pl[lo] : NaN;
+    };
+    let work = 0;
+
     for (const [src, ranges] of byMesh) {
       const geo = src.geometry;
       const index = geo.index;
@@ -359,109 +414,150 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
       const ia = index.array;
       const names = Object.keys(geo.attributes).filter((n) => !(geo.attributes[n] as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute);
       const srcA = names.map((n) => geo.getAttribute(n) as THREE.BufferAttribute);
-      const outA: number[][] = names.map(() => []);
-      const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-      const pa = pos.array as Float32Array;
+      const sizes = srcA.map((a) => a.itemSize);
+      const pa = (geo.getAttribute('position') as THREE.BufferAttribute).array as Float32Array;
       const mi = meshList.length;
       const vote = VOTE_PARTS.indexOf((src.userData?.part as string | undefined) ?? '');
       const aIdx = names.indexOf('aA');
+      let cap = 0;
       let nv = 0;
-      const stack: number[][][] = [];
+      let out: Float32Array[] = sizes.map(() => new Float32Array(0));
+      const reserveVerts = (extra: number): void => {
+        if (nv + extra <= cap) return;
+        cap = Math.max(1024, cap * 2, nv + extra);
+        out = out.map((o, a) => {
+          const n = new Float32Array(cap * sizes[a]);
+          n.set(o.subarray(0, nv * sizes[a]));
+          return n;
+        });
+      };
 
-      const emit = (poly: number[][], i0: number, i1: number, i2: number): void => {
-        for (let f = 1; f < poly.length - 1; f++) {
-          const tri = [poly[0], poly[f], poly[f + 1]];
-          const e1x = tri[1][3] - tri[0][3], e1y = tri[1][4] - tri[0][4], e1z = tri[1][5] - tri[0][5];
-          const e2x = tri[2][3] - tri[0][3], e2y = tri[2][4] - tri[0][4], e2z = tri[2][5] - tri[0][5];
-          const cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x;
-          if (cx * cx + cy * cy + cz * cz < 1e-12) continue;
-          const lx = (tri[0][3] + tri[1][3] + tri[2][3]) / 3, ly = (tri[0][4] + tri[1][4] + tri[2][4]) / 3, lz = (tri[0][5] + tri[1][5] + tri[2][5]) / 3;
-          for (const v of tri) {
-            for (let a = 0; a < srcA.length; a++) {
-              const s = srcA[a].itemSize, arr = srcA[a].array;
-              for (let k = 0; k < s; k++) outA[a].push(v[0] * arr[i0 * s + k] + v[1] * arr[i1 * s + k] + v[2] * arr[i2 * s + k]);
+      const assign = (lx: number, ly: number, lz: number, base: number, nvBase: number): void => {
+        if (lx < lox || lx > hix || ly < loy || ly > hiy || lz < loz || lz > hiz) return;
+        const cl = cells[(cellIx(lx, lox, gnx) * gny + cellIx(ly, loy, gny)) * gnz + cellIx(lz, loz, gnz)];
+        if (!cl) return;
+        let best = -1, bd = ASSIGN_MAX, bv = Infinity;
+        for (let c = 0; c < cl.length; c++) {
+          const i = cl[c];
+          const o = i * 6;
+          const dx = Math.max(0, Math.abs(lx - bx[o]) - bx[o + 3]);
+          const dy = Math.max(0, Math.abs(ly - bx[o + 1]) - bx[o + 4]);
+          const dz = Math.max(0, Math.abs(lz - bx[o + 2]) - bx[o + 5]);
+          const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (d > bd + 1e-6) continue;
+          const vol = bx[o + 3] * bx[o + 4] * bx[o + 5];
+          if (d < bd - 1e-6 || vol < bv) {
+            bd = d;
+            bv = vol;
+            best = i;
+          }
+        }
+        if (best < 0) return;
+        const ps = b.pieces[best];
+        ps.tris.push(mi * TRI_MESH + base);
+        if (vote >= 0) {
+          ps.votes[vote]++;
+          if (aIdx >= 0) {
+            const av = out[aIdx];
+            for (let k = 0; k < 4; k++) ps.ts[k] += (av[nvBase * 4 + k] + av[(nvBase + 1) * 4 + k] + av[(nvBase + 2) * 4 + k]) / 3;
+            ps.tn++;
+          }
+        }
+      };
+
+      const clipTri = function* (i0: number, i1: number, i2: number): Generator<void, void, void> {
+        const ids = [i0, i1, i2];
+        const poly: number[][] = ids.map((_id, c) => [c === 0 ? 1 : 0, c === 1 ? 1 : 0, c === 2 ? 1 : 0, loc[c * 3], loc[c * 3 + 1], loc[c * 3 + 2]]);
+        const stack: number[][][] = [poly];
+        while (stack.length > 0) {
+          if (performance.now() > prepDeadline) yield;
+          const p = stack.pop()!;
+          let cut = false;
+          for (let ax = 0; ax < 3 && !cut; ax++) {
+            let mn = Infinity, mx = -Infinity;
+            for (const v of p) {
+              if (v[3 + ax] < mn) mn = v[3 + ax];
+              if (v[3 + ax] > mx) mx = v[3 + ax];
+            }
+            const c = crosses(ax, mn, mx);
+            if (c === c) {
+              const [a, d] = splitPoly(p, ax, c);
+              if (a.length >= 3) stack.push(a);
+              if (d.length >= 3) stack.push(d);
+              cut = true;
             }
           }
-          let best = -1, bd = ASSIGN_MAX, bv = Infinity;
-          for (let i = 0; i < np; i++) {
-            const o = i * 6;
-            if (bx[o + 3] === 0 && bx[o + 4] === 0) continue;
-            const dx = Math.max(0, Math.abs(lx - bx[o]) - bx[o + 3]);
-            const dy = Math.max(0, Math.abs(ly - bx[o + 1]) - bx[o + 4]);
-            const dz = Math.max(0, Math.abs(lz - bx[o + 2]) - bx[o + 5]);
-            const d = Math.hypot(dx, dy, dz);
-            if (d > bd + 1e-6) continue;
-            const vol = bx[o + 3] * bx[o + 4] * bx[o + 5];
-            if (d < bd - 1e-6 || vol < bv) {
-              bd = d;
-              bv = vol;
-              best = i;
-            }
-          }
-          if (best >= 0) {
-            const ps = b.pieces[best];
-            ps.tris.push(mi * TRI_MESH + nv);
-            if (vote >= 0) {
-              ps.votes[vote]++;
-              if (aIdx >= 0) {
-                const av = outA[aIdx];
-                const n = av.length;
-                for (let k = 0; k < 4; k++) ps.ts[k] += (av[n - 12 + k] + av[n - 8 + k] + av[n - 4 + k]) / 3;
-                ps.tn++;
+          if (cut) continue;
+          for (let f = 1; f < p.length - 1; f++) {
+            const t = [p[0], p[f], p[f + 1]];
+            const e1x = t[1][3] - t[0][3], e1y = t[1][4] - t[0][4], e1z = t[1][5] - t[0][5];
+            const e2x = t[2][3] - t[0][3], e2y = t[2][4] - t[0][4], e2z = t[2][5] - t[0][5];
+            const cx = e1y * e2z - e1z * e2y, cy = e1z * e2x - e1x * e2z, cz = e1x * e2y - e1y * e2x;
+            if (cx * cx + cy * cy + cz * cz < 1e-12) continue;
+            reserveVerts(3);
+            for (let v = 0; v < 3; v++) {
+              const w = t[v];
+              for (let a = 0; a < out.length; a++) {
+                const s = sizes[a], arr = srcA[a].array;
+                for (let k = 0; k < s; k++) out[a][(nv + v) * s + k] = w[0] * arr[i0 * s + k] + w[1] * arr[i1 * s + k] + w[2] * arr[i2 * s + k];
               }
             }
+            assign((t[0][3] + t[1][3] + t[2][3]) / 3, (t[0][4] + t[1][4] + t[2][4]) / 3, (t[0][5] + t[1][5] + t[2][5]) / 3, nv, nv);
+            nv += 3;
           }
-          nv += 3;
         }
       };
 
       for (const r of ranges) {
         for (let t = r.start; t < r.start + r.count; t += 3) {
+          if ((++work & 63) === 0 && performance.now() > prepDeadline) yield;
           const i0 = ia[t], i1 = ia[t + 1], i2 = ia[t + 2];
           if (i0 === i1 && i1 === i2) continue;
-          const ids = [i0, i1, i2];
-          const poly: number[][] = ids.map((id, c) => {
+          let spans = false;
+          for (let c = 0; c < 3; c++) {
+            const id = c === 0 ? i0 : c === 1 ? i1 : i2;
             const wx = pa[id * 3] - b.x, wy = pa[id * 3 + 1], wz = pa[id * 3 + 2] - b.z;
-            return [c === 0 ? 1 : 0, c === 1 ? 1 : 0, c === 2 ? 1 : 0, b.cs * wx - b.sn * wz, wy, b.sn * wx + b.cs * wz];
-          });
-          stack.push(poly);
-          while (stack.length > 0) {
-            const p = stack.pop()!;
-            let cut = false;
-            for (let ax = 0; ax < 3 && !cut; ax++) {
-              const k = 3 + ax;
-              let mn = Infinity, mx = -Infinity;
-              for (const v of p) {
-                if (v[k] < mn) mn = v[k];
-                if (v[k] > mx) mx = v[k];
-              }
-              const pl = planes[ax];
-              let lo = 0, hi = pl.length;
-              while (lo < hi) {
-                const m = (lo + hi) >> 1;
-                if (pl[m] <= mn + EPS) lo = m + 1;
-                else hi = m;
-              }
-              if (lo < pl.length && pl[lo] < mx - EPS) {
-                const [a, c] = splitPoly(p, ax, pl[lo]);
-                if (a.length >= 3) stack.push(a);
-                if (c.length >= 3) stack.push(c);
-                cut = true;
-              }
-            }
-            if (!cut) emit(p, i0, i1, i2);
+            loc[c * 3] = b.cs * wx - b.sn * wz;
+            loc[c * 3 + 1] = wy;
+            loc[c * 3 + 2] = b.sn * wx + b.cs * wz;
           }
+          for (let ax = 0; ax < 3 && !spans; ax++) {
+            const a = loc[ax], d = loc[3 + ax], e = loc[6 + ax];
+            const c = crosses(ax, Math.min(a, d, e), Math.max(a, d, e));
+            if (c === c) spans = true;
+          }
+          if (spans) {
+            yield* clipTri(i0, i1, i2);
+            continue;
+          }
+          reserveVerts(3);
+          for (let a = 0; a < out.length; a++) {
+            const s = sizes[a], arr = srcA[a].array, o = out[a];
+            const dst = nv * s;
+            for (let k = 0; k < s; k++) {
+              o[dst + k] = arr[i0 * s + k];
+              o[dst + s + k] = arr[i1 * s + k];
+              o[dst + 2 * s + k] = arr[i2 * s + k];
+            }
+          }
+          assign((loc[0] + loc[3] + loc[6]) / 3, (loc[1] + loc[4] + loc[7]) / 3, (loc[2] + loc[5] + loc[8]) / 3, nv, nv);
+          nv += 3;
         }
       }
+      if (performance.now() > prepDeadline) yield;
 
       // private copy of this part's triangles; the shared merged mesh loses them
       const g = new THREE.BufferGeometry();
-      names.forEach((n, a) => g.setAttribute(n, new THREE.BufferAttribute(new Float32Array(outA[a]), srcA[a].itemSize)));
+      for (let a = 0; a < names.length; a++) {
+        g.setAttribute(names[a], new THREE.BufferAttribute(out[a].slice(0, nv * sizes[a]), sizes[a]));
+        if (performance.now() > prepDeadline) yield;
+      }
       const idx = new Uint32Array(nv);
       for (let i = 0; i < nv; i++) idx[i] = i;
       g.setIndex(new THREE.BufferAttribute(idx, 1));
       g.computeBoundingSphere();
       g.computeBoundingBox();
+      if (performance.now() > prepDeadline) yield;
       const m = new THREE.Mesh(g, interiorMaterial(src.material as THREE.Material));
       m.name = `${src.name}-woken${b.specId}`;
       m.userData = src.userData;
@@ -476,7 +572,69 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
         sa.fill(0, r.start, r.start + r.count);
         markIndexDirty(src, r.start, r.start + r.count);
       }
+      if (performance.now() > prepDeadline) yield;
     }
+  }
+
+  /** Run building preparation for up to `ms` (all of it when ms is Infinity). */
+  function runPrep(ms: number): void {
+    prepDeadline = performance.now() + ms;
+    while (prepJobs.length > 0 && performance.now() < prepDeadline) {
+      const job = prepJobs[0];
+      if (job.gen.next().done) {
+        prepJobs.shift();
+        finishPrepare(job.b);
+      }
+    }
+  }
+
+  /** Make sure a building's preparation is queued (it runs in update()). */
+  function requestPrepare(b: WokenBuilding): void {
+    if (b.prepStarted) return;
+    b.prepStarted = true;
+    prepJobs.push({ b, gen: prepareGen(b) });
+  }
+
+  /** Complete a building's preparation now (rare: something needs its triangle assignment immediately). */
+  function prepareNow(b: WokenBuilding): void {
+    if (b.assigned) return;
+    requestPrepare(b);
+    const keep = prepDeadline;
+    for (;;) {
+      prepDeadline = Infinity;
+      const i = prepJobs.findIndex((j) => j.b === b);
+      if (i < 0) break;
+      if (prepJobs[i].gen.next().done) {
+        prepJobs.splice(i, 1);
+        finishPrepare(b);
+        break;
+      }
+    }
+    prepDeadline = keep;
+  }
+
+  function finishPrepare(b: WokenBuilding): void {
+    b.assigned = true;
+    for (const ps of b.pieces) {
+      if (!ps) continue;
+      for (let i = 0; i < ps.votes.length; i++) if (ps.votes[i] > 0) wantLooks.add(VOTE_LOOKS[i]);
+    }
+    // take-overs requested while it was being prepared
+    const q = b.queue;
+    b.queue = [];
+    for (const ps of q) {
+      ps.queued = false;
+      const h = ps.hd;
+      if (h) activate(h, ps, ps.queueShow && h.alive);
+    }
+    // shards spawned before the variant was known get their tint now
+    for (const [h, ps] of b.shardFix) {
+      if (!h.alive || !h.batch) continue;
+      applyVariant(h, ps);
+      scratchC.set(h.tintR, h.tintG, h.tintB, h.damage);
+      h.batch.mesh.setColorAt(h.inst, scratchC);
+    }
+    b.shardFix = [];
   }
 
   /** Look and tint a piece takes from the town triangles it replaces (masonry variant, per-building tint, soot). */
@@ -497,7 +655,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   function materialize(h: Handle): void {
     if (h.batch || !h.piece || !h.pc) return;
     const ps = h.pc;
-    if (!ps.bld.assigned) prepareBuilding(ps.bld);
+    if (!ps.bld.assigned) prepareNow(ps.bld);
     applyVariant(h, ps);
     const e = h.piece.halfExtents, i2 = h.inset;
     instantiate(h, buildGeoData(boxGeo(Math.max(0.01, e[0] - i2), Math.max(0.01, e[1] - i2), Math.max(0.01, e[2] - i2)), h.piece));
@@ -509,8 +667,17 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
    */
   function activate(h: Handle, ps: PieceState, show: boolean): void {
     if (ps.activated) return;
+    if (!ps.bld.assigned) {
+      // not prepared yet: the town's meshes stay as they are and the take-over waits for the preparation
+      ps.queueShow = ps.queued ? ps.queueShow && show : show;
+      if (!ps.queued) {
+        ps.queued = true;
+        ps.bld.queue.push(ps);
+      }
+      requestPrepare(ps.bld);
+      return;
+    }
     ps.activated = true;
-    if (!ps.bld.assigned) prepareBuilding(ps.bld);
     for (const code of ps.tris) {
       const mi = Math.floor(code / TRI_MESH);
       const t = code - mi * TRI_MESH;
@@ -610,6 +777,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     tr[o] = 0; tr[o + 1] = -1000; tr[o + 2] = 0; tr[o + 3] = 0; tr[o + 4] = 0; tr[o + 5] = 0; tr[o + 6] = 1;
     if (pc) {
       pc.handle = id;
+      pc.hd = h;
       tr.set(pc.rest, o);
     }
     liveHandles++;
@@ -710,7 +878,7 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     let b = woken.get(graph.specId);
     if (!b) {
       pendingWake.delete(graph.specId);
-      b = { specId: graph.specId, x: graph.x, z: graph.z, cs: Math.cos(graph.yaw), sn: Math.sin(graph.yaw), pieces: [], assigned: false, interior: false };
+      b = { specId: graph.specId, x: graph.x, z: graph.z, cs: Math.cos(graph.yaw), sn: Math.sin(graph.yaw), pieces: [], assigned: false, prepStarted: false, queue: [], shardFix: [], interior: false };
       woken.set(graph.specId, b);
     }
     const c = piece.center;
@@ -722,10 +890,11 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
         0, Math.sin(half), 0, Math.cos(half),
       ),
       box: Float64Array.of(c[0], c[1], c[2], e[0], e[1], e[2]),
-      tris: [], structural, shown: false, votes: [0, 0, 0, 0, 0], ts: [0, 0, 0, 0], tn: 0,
+      tris: [], queued: false, queueShow: true, hd: null, structural, shown: false, votes: [0, 0, 0, 0, 0], ts: [0, 0, 0, 0], tn: 0,
     };
     b.pieces[piece.index] = pc;
     pieceStates.set(piece, pc);
+    wantLooks.add(look);
     // Interior structure is drawn 2 cm smaller so faces flush with the facade do not z-fight it.
     const h = reserve(look, tintOf(piece), false, pc, piece, structural ? 0.02 : 0);
     return h.id;
@@ -748,9 +917,15 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
     // a shard of a woken building's piece takes the same masonry variant and tint as the town it came from
     const tmp = { piece, look: entry.look, tintR: 0, tintG: 0, tintB: 0 } as unknown as Handle;
     tmp.tintR = tmp.tintG = tmp.tintB = tintOf(piece);
-    if (!ps.bld.assigned) prepareBuilding(ps.bld);
-    applyVariant(tmp, ps);
-    return create(tmp.look, cell, tintOf(piece), true, tmp);
+    if (ps.bld.assigned) applyVariant(tmp, ps);
+    const id = create(tmp.look, cell, tintOf(piece), true, tmp);
+    if (!ps.bld.assigned) {
+      const sh = handles[id];
+      sh.piece = piece;
+      ps.bld.shardFix.push([sh, ps]); // tinted when the building's preparation finishes
+      requestPrepare(ps.bld);
+    }
+    return id;
   }
 
   function setTransform(h: RenderHandle, pos: THREE.Vector3Like, quat: { x: number; y: number; z: number; w: number }): void {
@@ -849,7 +1024,10 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
       if (id < 0) continue;
       const hd = handles[id];
       if (!hd || !hd.alive) continue;
-      if (hd.pc && !hd.pc.activated) activate(hd, hd.pc, true);
+      if (hd.pc && !hd.pc.activated) {
+        if (!hd.pc.bld.assigned) prepareNow(hd.pc.bld);
+        activate(hd, hd.pc, true);
+      }
       if (!hd.data) continue;
       const d = hd.data;
       const c = chunkFor(hd.look, d.vCount, d.idx.length);
@@ -886,6 +1064,17 @@ export function createDestructionRenderer(scene: THREE.Scene, town: TownLike, qu
   // ------------------------------------------------ per-frame
 
   function update(): void {
+    for (const wb of woken.values()) if (!wb.prepStarted) requestPrepare(wb);
+    if (prepJobs.length > 0) runPrep(PREP_BUDGET_MS);
+    if (wantLooks.size > 0) {
+      for (const lk of wantLooks) {
+        wantLooks.delete(lk);
+        if (!(batches.get(lk)?.length)) {
+          newBatch(lk); // one per frame: allocating a batch is not free
+          break;
+        }
+      }
+    }
     if (pendingWake.size > 0) {
       for (const id of pendingWake) hideAll(id);
       pendingWake.clear();
