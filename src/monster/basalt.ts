@@ -125,8 +125,8 @@ export function createBasalt(
   const wanted = quality.level === 'low' ? 0 : quality.level === 'ultra' ? 2 : 1;
   const lightCount = Math.min(wanted, quality.maxDynamicLights);
   const lights: THREE.PointLight[] = [];
-  const lightBase = [450, 250];
-  const lightColor = [0xff6a22, 0xff4a12];
+  const lightBase = [420, 160];
+  const lightColor = [0xff9a45, 0xff7a30];
   const lightPos: [number, number, number][] = [
     [0, 2.5, -10],
     [0, -2.0, -8],
@@ -141,7 +141,7 @@ export function createBasalt(
 
   // Ground glow: additive lava-light pool under the monster (the whole story on low tiers).
   const glow = createGroundGlowMaterial();
-  const glowMesh = new THREE.Mesh(new THREE.PlaneGeometry(46, 46), glow.material);
+  const glowMesh = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), glow.material);
   glowMesh.rotation.x = -Math.PI / 2;
   glowMesh.position.y = 0.15;
   glowMesh.renderOrder = 2;
@@ -149,7 +149,7 @@ export function createBasalt(
   // main.ts flags every mesh under `object` as a shadow caster; a ground decal must never cast.
   Object.defineProperty(glowMesh, 'castShadow', { get: () => false, set: () => {} });
   Object.defineProperty(glowMesh, 'receiveShadow', { get: () => false, set: () => {} });
-  glow.intensity.value = quality.level === 'low' ? 1.0 : 0.7;
+  glow.intensity.value = quality.level === 'low' ? 0.9 : 0.6;
   object.add(glowMesh);
 
   scene.add(object);
@@ -241,7 +241,7 @@ export function createBasalt(
     flicker.t += 1 / 60;
     const fl = 0.93 + 0.07 * Math.sin(flicker.t * 11.3) * Math.sin(flicker.t * 7.1 + 1.3);
     for (let i = 0; i < lights.length; i++) lights[i].intensity = lightBase[i] * (0.72 + 0.28 * pulse) * fl;
-    glow.intensity.value = (quality.level === 'low' ? 1.0 : 0.7) * (0.75 + 0.25 * pulse) * fl;
+    glow.intensity.value = (quality.level === 'low' ? 0.9 : 0.6) * (0.75 + 0.25 * pulse) * fl;
   }
 
   return {

@@ -105,7 +105,7 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   const aMat: N = attribute('aMat', 'vec4');
 
   const molten = aMat.x;
-  const crackDensity = aMat.y;
+  const crackDensity = detail >= 2 ? aMat.y : min(aMat.y, 1.6);
   const tint = aMat.z;
   const rnd = aMat.w;
 
@@ -133,17 +133,25 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   const p = aRest;
   const zoneNoise = fbm2(p.mul(0.085).add(vec3(3.1, 7.7, 1.3))); // -1..1 big blobs: where cracks are dense
   const widthNoise = fbm2(p.mul(0.23).add(vec3(11.3, 2.2, 5.9))); // varies width along a crack
-  const vA = voronoi(p.mul(1 / 3.4).add(vec3(0.0, 0.0, 0.0)), detail >= 2);
+  // Domain-warped so borders wander like fissures instead of straight tile edges.
+  const wq = p.mul(0.3);
+  const warp = vec3(mx_noise_float(wq), mx_noise_float(wq.add(7.1)), mx_noise_float(wq.add(13.7))).mul(2.4);
+  const pw = p.add(warp);
+  const cellScale = mix(1 / 5.0, 1 / 2.8, widthNoise.mul(0.5).add(0.5));
+  const vA = voronoi(pw.mul(cellScale), detail >= 2);
   const edgeA = vA.y.sub(vA.x); // ~0 on borders, grows into the cell interior
 
-  const zone = smoothstep(0.0, 0.75, zoneNoise.add(crackDensity.sub(1).mul(0.55))); // 0..1: where the big cracks open
-  const hot = saturate(zone.mul(crackDensity.mul(0.8)).add(heat.mul(0.3)));
+  // Dense fissures around the chest core; calm rock elsewhere unless a chunk asks for more.
+  const coreDist = p.sub(vec3(0, 18.8, -5.0)).length();
+  const coreBoost = float(1).sub(smoothstep(0.0, 4.5, coreDist)).mul(0.9);
+  const zone = smoothstep(-0.15, 0.6, zoneNoise.add(crackDensity.sub(1).mul(0.6)).add(coreBoost)); // 0..1: where the big cracks open
+  const hot = saturate(zone.mul(crackDensity.mul(detail >= 2 ? 0.8 : 0.45)).add(heat.mul(0.3)));
   // Crack half-width in F2-F1 cell units: thin hairlines most places, fat in hot zones.
   const wA = mix(0.006, 0.075, widthNoise.mul(0.5).add(0.5).mul(hot)).add(heat.mul(0.02));
   // 0 = no crack .. 1 = crack core
   const crackA = float(1)
     .sub(smoothstep(wA.mul(0.1), wA, edgeA))
-    .mul(smoothstep(0.05, 0.3, zone.mul(crackDensity)));
+    .mul(smoothstep(0.05, 0.3, zone.mul(crackDensity)).mul(detail >= 2 ? 1 : 0.7));
 
   let crackB: N = float(0);
   let edgeB: N = float(9);
@@ -188,8 +196,8 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
   const patch = fbm2(p.mul(0.33).add(vec3(8.0, 1.0, 3.0))).mul(0.5).add(0.5); // 0..1
   const grain = mx_noise_float(p.mul(2.7)).mul(0.5).add(0.5);
   // Blue-black basalt with rare warm brown / pale grey patches.
-  let albedo: N = mix(vec3(0.052, 0.058, 0.074), vec3(0.105, 0.1, 0.108), smoothstep(0.35, 0.9, patch));
-  albedo = mix(albedo, vec3(0.1, 0.075, 0.062), smoothstep(0.62, 0.95, mx_noise_float(p.mul(0.21).add(21.0)).mul(0.5).add(0.5)).mul(0.5));
+  let albedo: N = mix(vec3(0.075, 0.066, 0.06), vec3(0.13, 0.115, 0.105), smoothstep(0.35, 0.9, patch));
+  albedo = mix(albedo, vec3(0.09, 0.066, 0.05), smoothstep(0.62, 0.95, mx_noise_float(p.mul(0.21).add(21.0)).mul(0.5).add(0.5)).mul(0.5));
   albedo = albedo.mul(tint).mul(float(0.82).add(grain.mul(0.36)));
 
   let rough: N = float(0.86).sub(grain.mul(0.18));
@@ -205,11 +213,11 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
 
   // Worn lighter edges on every facet.
   const edgeWear = float(1).sub(smoothstep(0.0, 0.32, edgeDist));
-  albedo = albedo.add(vec3(0.05, 0.052, 0.06).mul(edgeWear).mul(tint));
+  albedo = albedo.add(vec3(0.024, 0.022, 0.022).mul(edgeWear).mul(tint));
   rough = rough.sub(edgeWear.mul(0.2));
 
   // Scorched near cracks: darker, slightly redder char; molten parts have no albedo.
-  albedo = albedo.mul(float(1).sub(bleed.mul(0.4)));
+  albedo = mix(albedo.mul(float(1).sub(bleed.mul(0.4))), vec3(0.07, 0.035, 0.02), bleed.mul(0.5));
   albedo = mix(albedo, vec3(0.02, 0.008, 0.004), saturate(molten.mul(1.2)));
 
   // ---- rain wetness ----------------------------------------------------
@@ -229,8 +237,8 @@ export function createBasaltMaterial(quality: QualityPreset): BasaltMaterialHand
 
   // ---- night readability: cool rim light + lava-lit underside -----------
   const nv = saturate(dot(normalView, positionViewDirection));
-  const rim = pow(float(1).sub(nv), 3.0);
-  const rimEmissive = vec3(0.1, 0.16, 0.3).mul(rim).mul(float(0.55).add(saturate(normalWorld.y).mul(0.9)));
+  const rim = pow(float(1).sub(nv), 4.5);
+  const rimEmissive = vec3(0.08, 0.12, 0.2).mul(rim).mul(float(0.6).add(saturate(normalWorld.y).mul(0.6)));
   // A hint of the lava's own light bouncing up onto the underside / lower body.
   const underGlow = vec3(0.55, 0.12, 0.02).mul(saturate(normalWorld.y.negate().mul(0.6).add(0.2))).mul(0.14).mul(pulse);
 
@@ -283,8 +291,8 @@ export function createGroundGlowMaterial(): { material: THREE.MeshBasicNodeMater
   const r = sqrt(dot(d, d));
   const wob = mx_noise_float(vec3(d.x.mul(2.5), d.y.mul(2.5), time.mul(0.35))).mul(0.12);
   const fall = saturate(float(1).sub(r.add(wob)));
-  const glow = pow(fall, 2.6).mul(0.55).add(pow(fall, 7).mul(0.5));
-  const col = mix(vec3(0.7, 0.1, 0.015), vec3(1.0, 0.38, 0.06), pow(fall, 2.0)).mul(glow).mul(intensity);
+  const glow = pow(fall, 2.2).mul(0.45).add(pow(fall, 6).mul(0.5));
+  const col = vec3(1.0, 0.48, 0.16).mul(glow).mul(intensity);
   material.colorNode = col;
   material.opacityNode = float(1);
   return { material, intensity };

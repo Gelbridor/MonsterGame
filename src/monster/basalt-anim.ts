@@ -431,10 +431,10 @@ export class BasaltAnimator {
     const ampArm = lerp(0.4, 0.82, runAmt) * walkAmt;
     const swingR = -nbL * ampArm + this.armKick.x * 0.15;
     const swingL = -nbR * ampArm + this.armKick.x * 0.15;
-    const sag = 0.1 + 0.05 * breath; // idle: arms hang forward a touch
+    const sag = 0.14 + 0.05 * breath; // idle: arms hang forward a touch
     cur.uaRx = sag + swingR + 0.1 * runAmt;
     cur.uaLx = sag + swingL + 0.1 * runAmt;
-    const out = 0.2 + 0.03 * breath - 0.06 * runAmt;
+    const out = 0.3 + 0.03 * breath - 0.06 * runAmt;
     cur.uaRz = out;
     cur.uaLz = -out;
     const elbow = (sw: number) => 0.3 + 0.42 * Math.max(0, sw) + 0.55 * runAmt + 0.05 * (0.5 + 0.5 * breath);
@@ -454,12 +454,12 @@ export class BasaltAnimator {
 
     // Tail: whip-like follow-through chain.
     const tailBase =
-      -pyaw * 1.1 - 0.35 * turnNorm + 0.1 * (nbL - nbR) * walkAmt + 0.05 * Math.sin(this.time * 0.6);
+      0.2 - pyaw * 1.1 - 0.35 * turnNorm + 0.1 * (nbL - nbR) * walkAmt + 0.05 * Math.sin(this.time * 0.6);
     let follow = tailBase;
     for (let i = 0; i < 4; i++) {
       spring(this.tailYaw[i], follow, 6.5 - i * 1.0, 0.55, dt);
       follow = this.tailYaw[i].x;
-      const pitchT = [0.1, 0.17, 0.2, 0.2][i] - 0.16 * runAmt + 0.04 * Math.sin(this.time * 0.8 + i) - 0.6 * this.pelvisY.v * 0.03;
+      const pitchT = [0.0, 0.05, 0.1, 0.1][i] - 0.16 * runAmt + 0.04 * Math.sin(this.time * 0.8 + i) - 0.6 * this.pelvisY.v * 0.03;
       spring(this.tailPitch[i], pitchT, 5.5 - i * 0.5, 0.6, dt);
     }
     cur.t1y = this.tailYaw[0].x;
