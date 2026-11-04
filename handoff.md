@@ -2,12 +2,11 @@
 
 State of the work as of 3 Nov 2026 (evening), written so another agent can pick it up cold.
 
-- **Design:** read [`plan.md`](plan.md) first. Its **Milestones** table defines each phase and its gate.
-- **Look:** see the reference screenshots in [`docs/screenshots/`](docs/screenshots/).
+This file holds the **current state** only. For commands, architecture and conventions see [`CLAUDE.md`](CLAUDE.md); for the design and phase gates see [`plan.md`](plan.md).
 
 ## Where things are
 
-**`main` (`e15e5b4`) is live** at https://gelbridor.github.io/MonsterGame/. It holds:
+**`main` is live** at https://gelbridor.github.io/MonsterGame/. It holds:
 
 - Phase 1 Foundations and the graphics pass, plus both polish rounds (Basalt lava contrast, visible head, planted feet; city wet ground without frost, smooth kerb/dip puddles, footprint-filtered setts, GTAO normals from depth, SSR soft knee that removed the pale "ice" puddles).
 - **Phase 2 destruction, work in progress** (see below): structural stress solver, debug punch, piece renderer, stats rows and panel sliders.
@@ -15,7 +14,7 @@ State of the work as of 3 Nov 2026 (evening), written so another agent can pick 
 
 Every branch listed by `git branch` is merged into `main`, including `p2-vis-perf` (renderer `prepareBuilding` is now cheap and time-sliced at 3 ms per frame from wake; renderer share of a destruction call is a few ms).
 
-Leftover worktrees under `.claude/worktrees/` (p2-sim, p2-vis, p2-wire, perf-q, city-r2, two old `agent-*`) are all merged and can be removed with `git worktree remove`.
+Leftover worktrees under `.claude/worktrees/` on the owner's machine (p2-sim, p2-vis, p2-wire, perf-q, city-r2, two old `agent-*`) are all merged and can be removed with `git worktree remove`.
 
 **Gate status:** the Phase 1 gate has not been formally signed off by the owner, although the owner now plays the live build on a ThinkPad T480. The Phase 2 gate is not yet passed (see "Phase 2 status").
 
@@ -59,45 +58,6 @@ ThinkPad T480: Intel UHD 620 integrated GPU, 4 cores / 8 threads. Measured by th
 3. Cheaper Low-tier materials for integrated GPUs; ask the owner for fps on the T480 afterwards.
 4. Ask the owner to sign off Phase 1 and Phase 2 gates, and to confirm the reconstructed Phase 2–5 roadmap in `plan.md`.
 
-## How it's built
+## Reference
 
-Vite + TypeScript, Three.js r187 `WebGPURenderer` with TSL node materials (automatic WebGL 2 fallback, including a reload onto WebGL 2 if the WebGPU device is lost), and Rapier 0.21 physics with a fixed 60 Hz step.
-
-- **`src/core/types.ts`** holds the contracts between modules (`QualityPreset`, `RenderContext`, `Physics`, `Input`, `Town`, `Monster`, `FollowCamera`, `DebugUI`, `FrameStats`). **`src/destruction/types.ts`** holds the destruction contracts (`BuildingGraph`, `DestructionRenderer`, `DamageEvent`, `Destruction`).
-- **`src/config.ts`** holds every tunable number. The debug panel (`src/debug/panel.ts`, backtick key) auto-builds from it; add slider ranges in its `META` table.
-- **`src/core/quality.ts`**: Low / Medium / High / Ultra tiers. `probeGpu()` + `classifyGpu()` pick tier and backend from the GPU (integrated/software → WebGL 2). Priority: `?quality=` URL, then the stored auto step-down (`localStorage` `mb.qualityAuto`), then the GPU heuristic. `?quality=auto` or the panel's "Reset auto quality" clears it. A URL-forced tier disables dynamic resolution and step-down. `?webgl` / `?webgpu` force the backend.
-- **`src/main.ts`** wires everything. Each fixed tick: input → `basalt.fixedUpdate` → punch → `physics.step` → `destruction.fixedUpdate`. Each frame: interpolate Basalt → camera → weather → `destruction.syncVisual` → render → stats. `window.mb` exposes `config`, `ctx`, `physics`, `basalt`, `town`, `destruction`, `punchAt`, `rain`, `splashes`, `cones`.
-- **Units:** 1 unit = 1 m, kg, 9.81 m/s². Basalt is 30 m tall. **Angles:** 0 = facing −Z, positive = counter-clockwise from above.
-
-| Area | Files |
-| --- | --- |
-| Renderer, sky, env, post | `src/render/renderer.ts`, `sky.ts`, `environment.ts`, `post.ts` (MRT, bloom, GTAO, SSR with soft knee, SMAA/FXAA, filmic grade) |
-| Weather | `src/render/effects/rain.ts`, `splashes.ts`, `light-cones.ts`, `rain-ripples.ts`, `weather-common.ts` |
-| City | `src/city/town-layout.ts`, `buildings.ts`, `landmarks.ts`, `materials.ts`, `dressing.ts`, `mesh-builder.ts`, `signage.ts` |
-| Basalt | `src/monster/basalt.ts` (**don't change movement behaviour**), `basalt-model.ts`, `basalt-geom.ts`, `basalt-anim.ts`, `rock-material.ts` |
-| Destruction sim | `src/destruction/index.ts` (step, contact events, damage), `stress.ts` (solver), `joints.ts` (groups, bonds, crushing, design), `building-gen.ts` (floors × bays graph per tier), `materials.ts`, `sleep.ts` (wake, body pool, shards, rubble, cap) |
-| Destruction visuals | `src/destruction/piece-render.ts`, `fracture.ts` (Voronoi cells), `piece-materials.ts`, `debug-render.ts` (null renderer for the harness), viewer `src/destruction/viewer.html` |
-| Camera, input, debug, physics | `src/camera/follow-camera.ts`, `src/core/input.ts` (keys must be listed in `GAME_KEYS`), `src/debug/panel.ts`, `src/physics/world.ts` |
-
-## Testing
-
-- **Run it:** `npm install`, then `npm run dev` (`-- --host` for phones on the same Wi-Fi; those get WebGL 2). `npm run build` type-checks and builds.
-- **Destruction harness (headless, real Rapier, null renderer):** `node scripts/run-harness.cjs <test>`; `LEVEL=low|medium|high|ultra` picks the tier.
-  - `t1` terrace punch; `t2` tower collapse (`MODES=cols,side,all,punch`, `EVERY=0.5`, `TRACE=1`); `t3` all buildings woken for 60 s (stability); `t4` cost per tier during a collapse; `t5` solve cost; `t6` replay a punch (`PUNCH=x,y,z`, `LONG=1`, `PROF=1` for Rapier timers); `t7` wake/break step costs; `t8` three punches (warm-up vs steady state); `t9` fracture shard counts.
-- **Visual checks:** `node scripts/shot.cjs "http://localhost:<port>/?webgl&quality=low" out.png --size 800x450 --wait 20000 --eval "..."`. Only console warnings/errors are forwarded, so log with `console.warn`. To time destruction in the browser, wrap `mb.destruction.fixedUpdate` / `syncVisual` with `performance.now()` in `--eval`.
-  - This headless Chromium has **no GPU** (SwiftShader). Always use WebGL; it runs at 1–5 fps, so trust CPU timings and draw-call counts, not fps. Medium at 960×540 sometimes crashes the page; use 800×450.
-  - Judge the **default gameplay camera** first. The scratchpad does not survive sessions; keep reference shots in `docs/screenshots/`.
-- **Deploying:** every push to `main` deploys to GitHub Pages (`.github/workflows/pages.yml`); `gh run watch` follows it.
-
-## Working method
-
-The owner asked for small tasks to go to Sonnet sub-agents, each reviewed before merging. That worked:
-- Give each agent its own worktree (create by hand under `.claude/worktrees/`, junction `node_modules` with `mklink /J`; agent worktree isolation is refused on this machine), its own files and dev-server port, and require screenshots in the scratchpad.
-- View **every** screenshot before merging and send back concrete, prioritised fixes. This session's in-game checks caught faults the agents' own viewer shots missed (diagonal holes, see-through buildings, pale damaged pieces, the J key not registered, the 400-shard walls).
-- Background agents sometimes re-send their final report repeatedly; stop them with `TaskStop` once handled.
-
-**Gotchas:**
-- Git has no identity configured: commit with `git -c user.name=Claude -c user.email=noreply@anthropic.com`. Commit messages end with a `Co-Authored-By:` line.
-- Playwright: `npm install --no-save playwright` and `npx playwright install chromium` after a fresh `npm install`.
-- Never `git add -A` from the repo root while worktrees exist under `.claude/`. No history rewrites (force-push and amend are blocked); fix with follow-up commits. The owner may merge PRs on GitHub, so fetch before working on `main`.
-- No model names in code or docs.
+Commands, the destruction harness tests, screenshot checks, architecture and the working method are in [`CLAUDE.md`](CLAUDE.md).

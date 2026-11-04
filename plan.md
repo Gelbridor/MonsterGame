@@ -229,7 +229,7 @@ It pulls back during collapses so you see the whole fall, and briefly slows to 3
 
 The visual target is a stylised, cinematic night look, like a modern kaiju film rather than photorealism.
 A stylised look hides the limits of browser rendering and stays sharp on phones.
-The graphics pass has implemented most of the rendering list below. What remains is the polish round in `handoff.md`.
+The graphics pass and its two polish rounds have implemented most of the rendering list below. Remaining faults are tracked in `handoff.md`.
 
 **Rendering features**
 
@@ -264,7 +264,7 @@ Destruction comes first. Phases 2 and 3 make buildings fall and keep the frame r
 Each phase ends with a playable link on GitHub Pages. The owner tests the gate on their own phone and PC, and the next phase starts only when the gate passes.
 
 > The original roadmap diagram (5 phases, 4 gates) was lost when the plan was exported.
-> The phases below are reconstructed from the rest of this document. The owner should confirm them before Phase 2 starts.
+> The phases below are reconstructed from the rest of this document. The owner has not yet confirmed them (see Open questions).
 
 | Phase | Builds | Gate (tested by the owner) |
 | --- | --- | --- |
@@ -316,52 +316,16 @@ Debris pooling and rubble merging are built in Phase 2, before more polish, for 
 
 ### Project layout
 
-```text
-MonsterGame/
-  plan.md                  this document
-  handoff.md               current state, open faults, next steps
-  index.html
-  package.json, vite.config.ts, tsconfig.json
-  .github/workflows/pages.yml   deploy to GitHub Pages on push to main
-  scripts/shot.cjs         headless screenshot harness for visual checks
-  docs/screenshots/        reference shots of the current look
-  src/
-    main.ts                start-up: renderer, physics, town, monster, weather, game loop
-    config.ts              every tunable number in one place
-    core/
-      types.ts             shared contracts between modules
-      loop.ts              fixed 60 Hz physics step, variable-rate rendering
-      input.ts             keyboard, gamepad, touch
-      quality.ts           Low / Medium / High / Ultra presets, auto-detect
-    render/
-      renderer.ts          WebGPU with WebGL 2 fallback, lights, shadows
-      sky.ts, environment.ts, post.ts   night sky, env map + fog, post-processing
-      effects/             rain, splashes, light cones, puddle ripples (later: dust, fire, sparks, glass, decals)
-    physics/
-      world.ts             Rapier set-up (later: body and particle pools)
-    destruction/           Phase 2
-      building-gen.ts      floors × bays building generator
-      fracture.ts          Voronoi pre-fracture of panels and slabs
-      joints.ts            breakable joints, per-step stress check
-      materials.ts         strength, mass and effects per material
-      sleep.ts             wake/sleep buildings, rubble merging
-    city/
-      town-layout.ts       British town layout → visuals + colliders
-      buildings.ts, landmarks.ts, materials.ts, dressing.ts, signage.ts, mesh-builder.ts
-      props.ts             Phase 3: buses, cabs, cars as physics objects
-    monster/
-      basalt.ts            physics body and character controller
-      basalt-model.ts, basalt-geom.ts, rock-material.ts, basalt-anim.ts   model, material, procedural animation
-      moves.ts             Phase 4: damage shapes for each attack
-    camera/
-      follow-camera.ts     follow (later: pull-back on collapses, slow motion)
-    audio/                 Phase 5: layered impact sounds, music intensity
-    debug/
-      panel.ts             live tuning panel and stats overlay
-  public/                  textures, sounds, models
-```
+The current layout of `src/` and `scripts/` is described in [`CLAUDE.md`](CLAUDE.md). Modules still to come:
 
-**Dependencies:** `three`, `@dimforge/rapier3d-compat`, `lil-gui`, `vite`, `typescript` (with `@types/three`).
+| Phase | Module | Purpose |
+| --- | --- | --- |
+| 3 | `src/city/props.ts` | Buses, cabs and cars as physics objects |
+| 4 | `src/monster/moves.ts` | Damage shapes for each attack |
+| 4 | `src/camera/follow-camera.ts` (extend) | Pull-back on collapses, slow motion |
+| 5 | `src/render/effects/` (extend) | Dust, fire, sparks, glass, decals |
+| 5 | `src/audio/` | Layered impact sounds, music intensity |
+| any | `public/` | Textures, sounds and models, if hand-made assets arrive |
 
 ### Conventions
 
