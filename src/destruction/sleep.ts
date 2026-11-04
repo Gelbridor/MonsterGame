@@ -9,7 +9,7 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import type { BuildingSpec } from '../city/town-layout';
 import type { QualityLevel } from '../core/types';
 import { config } from '../config';
-import { generateBuilding } from './building-gen';
+import { generateBuilding, type GenGraph } from './building-gen';
 import { MATERIALS } from './materials';
 import {
   CG_CRUSHED, SHARD_BASE, createGroup, makeBuilding, readPose, resplit, retireGroup, rotate,
@@ -33,6 +33,8 @@ interface Debris {
   hx: number; hy: number; hz: number;
   /** Pulverised by compressive failure: does not collide with building pieces. */
   crushed: boolean;
+  /** Load (N) from a building piece that pulverises this shard (loose rubble under a falling storey). */
+  cap: number;
 }
 
 export interface SleepSystem {
@@ -48,11 +50,18 @@ export interface SleepSystem {
   enforceCap(): void;
   /** Merge a loose group into rubble now. */
   bakeGroup(G: Group): void;
+  /** A building piece pushes on shard `di` with force `f` (N): pulverise it if that exceeds its capacity. */
+  loadShard(di: number, f: number): void;
 }
 
 export interface SleepOptions {
   level: QualityLevel;
   maxActiveChunks: number;
+  /**
+   * Building graphs by spec id, generated ahead of time (see Destruction.prepare). A wake only
+   * creates bodies when its graph is here; otherwise it generates the graph on the spot.
+   */
+  graphs: Map<number, GenGraph | null>;
 }
 
 /** Loose groups with at most this many pieces are baked to rubble once at rest. */
@@ -65,6 +74,11 @@ const CRUSHED_SHARDS = 3;
  * and neighbour; Rapier then builds all those contacts in one step (about 20 ms per broken piece).
  */
 const SHARD_COLLIDER_SCALE = 0.9;
+/**
+ * Crushing capacity of a loose shard as a fraction of its material's strength over its section
+ * (volume^(2/3)): loose rubble is unconfined and cracked, far weaker than the intact member.
+ */
+const SHARD_CRUSH_STRENGTH = 0.25;
 /** Most shard bodies created per physics step; further breaks wait a step or two (no frame spike). */
 const SHARDS_PER_STEP = 24;
 
@@ -96,7 +110,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
   for (let i = 0; i < poolSize; i++) {
     debris.push({
       used: false, body: null, pooled: true, collider: null, handle: -1, born: 0, life: 5, rest: 0,
-      cur: new Float64Array(7), prev: new Float64Array(7), hull: null, hx: 0, hy: 0, hz: 0, crushed: false,
+      cur: new Float64Array(7), prev: new Float64Array(7), hull: null, hx: 0, hy: 0, hz: 0, crushed: false, cap: 0,
     });
   }
   const debrisFree: number[] = [];
@@ -146,7 +160,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
       for (const G of sim.groups) if (!G.fixed) n++;
       return n;
     },
-    wake, update, enforceCap, bakeGroup,
+    wake, update, enforceCap, bakeGroup, loadShard,
   };
 
   // ---- body pool
@@ -272,6 +286,7 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
       d.hull = desc === null || hx > 0 ? null : hull;
       d.hx = hx; d.hy = hy; d.hz = hz;
       d.crushed = crushed;
+      d.cap = mat.strength * Math.cbrt(sh.volume) ** 2 * SHARD_CRUSH_STRENGTH;
       d.cur[0] = px; d.cur[1] = py; d.cur[2] = pz;
       d.cur[3] = quat[0]; d.cur[4] = quat[1]; d.cur[5] = quat[2]; d.cur[6] = quat[3];
       d.prev.set(d.cur);
@@ -279,6 +294,15 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
     }
     return n;
   };
+
+  function loadShard(di: number, f: number): void {
+    const d = debris[di];
+    if (!d || !d.used || d.crushed || !d.collider || f <= d.cap * config.destruction.bondStrengthScale) return;
+    // loose rubble cannot hold up a storey that lands on it: it is pulverised and spills aside
+    d.crushed = true;
+    d.collider.setCollisionGroups(CG_CRUSHED);
+    sim.crushedTotal++;
+  }
 
   // ---- rubble
   const rq = { x: 0, y: 0, z: 0, w: 1 };
@@ -388,7 +412,11 @@ export function createSleepSystem(sim: Sim, opts: SleepOptions): SleepSystem {
   // ---- waking
   function wake(spec: BuildingSpec, statics: RAPIER.Collider[] | undefined): Building | null {
     if (sim.buildings.has(spec.id)) return sim.buildings.get(spec.id)!;
-    const graph = generateBuilding(spec, opts.level);
+    let graph = opts.graphs.get(spec.id);
+    if (graph === undefined) {
+      graph = generateBuilding(spec, opts.level);
+      opts.graphs.set(spec.id, graph);
+    }
     if (!graph) return null;
     const bld = makeBuilding(spec, graph);
     sim.buildings.set(spec.id, bld);

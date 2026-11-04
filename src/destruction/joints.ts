@@ -85,6 +85,29 @@ export interface Group {
   busy: boolean;
   slot: number;
   live: boolean;
+  /** A landing whose stress solve has not converged yet: its load is solved again on the next steps. */
+  land: Landing | null;
+  /** Fixed group: a held peak contact load (Building.extHold) awaits a converged solve. */
+  holding: boolean;
+}
+
+/**
+ * The peak load of a landing (apparent gravity, contact loads and the contact pins of that step).
+ * A landing lasts a step or two, but its solve may need several steps' budget; the load is held
+ * until the solve converges and the bonds it overloads break.
+ */
+export interface Landing {
+  pieces: number[];
+  gx: number; gy: number; gz: number;
+  /** Contact loads (group frame) of G.pieces, xyz per piece in order. */
+  ext: Float32Array;
+  /** Pieces held by what the body landed on. */
+  pins: number[];
+  /** Velocity before the landing (for the momentum kept when the supports are crushed). */
+  pvx: number; pvy: number; pvz: number;
+  /** Apparent gravity in g. */
+  k: number;
+  steps: number;
 }
 
 export interface Building {
@@ -103,6 +126,8 @@ export interface Building {
   collider: Array<RAPIER.Collider | null>;
   handle: Int32Array;
   ext: Float32Array;
+  /** Peak contact load held for fixed groups until their solve converges (see Group.holding). */
+  extHold: Float32Array;
   extStamp: Int32Array;
   srcStamp: Int32Array;
   /** Per-step impact (peak contact force, N) on each piece, stamped with the step. */
@@ -139,6 +164,8 @@ export interface Sim {
   crushEnergy: number;
   /** Pieces crushed / destroyed by impact energy since start (stats). */
   crushedTotal: number;
+  /** Optional per-phase timing accumulator (ms by phase name) for profiling. */
+  prof?: Record<string, number>;
   /** Optional debug trace (harness). */
   trace?: (msg: string) => void;
   impactKillsTotal: number;
@@ -209,7 +236,7 @@ export function makeBuilding(spec: BuildingSpec, graph: GenGraph): Building {
     alive: new Uint8Array(np).fill(1), health, bondAlive: new Uint8Array(nb).fill(1),
     group: new Array<Group | null>(np).fill(null), collider: new Array<RAPIER.Collider | null>(np).fill(null),
     handle: new Int32Array(np).fill(-1),
-    ext: new Float32Array(np * 3), extStamp: new Int32Array(np).fill(-1), srcStamp: new Int32Array(np).fill(-1),
+    ext: new Float32Array(np * 3), extHold: new Float32Array(np * 3), extStamp: new Int32Array(np).fill(-1), srcStamp: new Int32Array(np).fill(-1),
     impact: new Float32Array(np), impactStamp: new Int32Array(np).fill(-1),
     liveBonds: nb, livePieces: np, damaged: new Uint8Array(np),
     disp: new Float64Array(np * 6),
@@ -269,7 +296,7 @@ export function createGroup(
   const G: Group = {
     id: sim.nextGroupId++, bld, fixed, body, pooled, pieces, ox: cx, oy: cy, oz: cz, mass: m,
     cur: new Float64Array(7), prev: new Float64Array(7),
-    vx: 0, vy: 0, vz: 0, born: sim.time, rest: 0, needsPush: true, dirty: true, hitStep: -1, pendingSplit: false, busy: false, slot: sim.groups.length, live: true,
+    vx: 0, vy: 0, vz: 0, born: sim.time, rest: 0, needsPush: true, dirty: true, hitStep: -1, pendingSplit: false, busy: false, slot: sim.groups.length, live: true, land: null, holding: false,
   };
   for (const i of pieces) {
     addPieceCollider(sim, bld, i, G);
@@ -489,6 +516,9 @@ export function solveGroup(sim: Sim, G: Group, gx: number, gy: number, gz: numbe
   const s = sim.solver;
   const np = G.pieces.length;
   if (np === 0) return 0;
+  // fixed groups and held landings keep their preconditioner while the topology is unchanged
+  const key = G.fixed ? G : G.land;
+  s.setKey(key, bld.liveBonds * 4096 + bld.livePieces);
   const res = s.solve(bld.graph, bld.alive, bld.bondAlive, G.pieces, np, gx, gy, gz, G.fixed, bld.srcStamp, sim.step, useExt ? bld.ext : null, strengthScale, bld.disp, maxWork, G.fixed ? SOLVE_TOL : LOOSE_TOL * 0.25);
   // A fixed group can wait for its solve to finish over the next steps. A loose body's load is a
   // transient (a landing lasts a step or two), so a nearly converged answer now beats none.
