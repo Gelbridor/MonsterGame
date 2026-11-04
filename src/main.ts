@@ -14,6 +14,7 @@ import { buildTown } from './city/town-layout';
 import { buildingColliders } from './city/buildings';
 import { createDestructionRenderer } from './destruction/piece-render';
 import { createDestruction } from './destruction';
+import { warmUpDestruction } from './destruction/warmup';
 import { createBasalt } from './monster/basalt';
 import { createFollowCamera } from './camera/follow-camera';
 import { createDebugUI } from './debug/panel';
@@ -61,6 +62,15 @@ async function start() {
   const destruction = createDestruction({
     physics, renderer: destructionRenderer, specs: town.specs, quality, buildingColliders,
   });
+  // Every building's piece graph is generated and its bonds designed now, nearest to the spawn
+  // first, and the whole destruction path is run once in a throwaway world (compiles Rapier's
+  // wasm and the sim's JS), so the first punch costs no more than any other.
+  await destruction.prepare(town.spawn, 12, (done, total) => {
+    loadingEl.textContent = `Preparing buildings ${done}/${total}…`;
+  });
+  loadingEl.textContent = 'Warming up physics…';
+  await new Promise((r) => setTimeout(r, 0));
+  const warmMs = warmUpDestruction(town.specs, quality, destruction.graphs);
 
   const basalt = createBasalt(ctx.scene, physics, town.spawn, quality);
   applyShadowFlags(basalt.object, 'monster', quality);
@@ -81,11 +91,13 @@ async function start() {
   // Latest input, read once per rendered frame and reused by every fixed step in that frame.
   let snapshot: InputSnapshot = input.read(0);
   let physicsMs = 0;
+  let destructionMs = 0;
 
   const stats: FrameStats = {
     fps: 0,
     frameMs: 0,
     physicsMs: 0,
+    destructionMs: 0,
     physicsSteps: 0,
     bodies: 0,
     activeBodies: 0,
@@ -142,7 +154,9 @@ async function start() {
       }
       punchHeld = snapshot.punch;
       physics.step();
+      const td = performance.now();
       destruction.fixedUpdate(dt);
+      destructionMs += performance.now() - td;
       physicsMs += physics.stats().stepMs;
     },
     frame(frameDt, alpha, steps) {
@@ -168,6 +182,7 @@ async function start() {
       stats.fps = frameDt > 0 ? 1 / frameDt : 0;
       stats.frameMs = frameDt * 1000;
       stats.physicsMs = physicsMs;
+      stats.destructionMs = destructionMs;
       stats.physicsSteps = steps;
       stats.bodies = p.bodies;
       stats.activeBodies = p.activeBodies;
@@ -186,6 +201,7 @@ async function start() {
       adaptive.frame(frameDt);
       stats.renderScale = config.render.renderScale;
       physicsMs = 0;
+      destructionMs = 0;
     },
   });
 
@@ -202,7 +218,7 @@ async function start() {
   // Handy from the browser console while tuning.
   Object.assign(window as unknown as Record<string, unknown>, { mb: { config, ctx, physics, basalt, town, destruction, punchAt, rain, splashes, cones } });
   console.info(
-    `[Monster Brawl] ${ctx.backend.toUpperCase()} · quality ${quality.level} · ${town.buildingCount} buildings`,
+    `[Monster Brawl] ${ctx.backend.toUpperCase()} · quality ${quality.level} · ${town.buildingCount} buildings · destruction warm-up ${Math.round(warmMs)} ms`,
   );
 }
 

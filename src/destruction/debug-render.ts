@@ -4,6 +4,7 @@
 
 import * as THREE from 'three/webgpu';
 import { MATERIALS } from './materials';
+import { fractureBox } from './fracture';
 import type { BuildingGraph, DestructionRenderer, FractureResult, PieceDef, RenderHandle } from './types';
 
 const CAPACITY = 24000;
@@ -14,15 +15,30 @@ export interface DebugRendererOptions {
   buildingRanges?: Array<{ id: number; part: string; triStart: number; triCount: number }>;
 }
 
-/** Null renderer for headless runs: same contract, draws nothing. */
-export function createNullRenderer(): DestructionRenderer {
+/**
+ * Null renderer for headless runs: same contract, draws nothing. Fracture is the game's real
+ * Voronoi fracture (`fractureBox`, with the game renderer's per-tier shard limits), so the harness
+ * sees the same shard counts and hulls as the game. `tier` 0..3 = low..ultra.
+ */
+export function createNullRenderer(tier = 2): DestructionRenderer {
   let next = 0;
   let live = 0;
   const cache = new Map<string, FractureResult>();
   return {
     hideBuilding() {},
     addPiece() { live++; return next++; },
-    fracture(piece, count) { return boxFracture(piece, count, cache); },
+    fracture(piece, count) {
+      const lim = piece.material === 'glass' ? [5, 7, 9, 12] : [7, 9, 12, 12];
+      const n = Math.max(2, Math.min(count, lim[Math.max(0, Math.min(3, tier))]));
+      const key = `v:${piece.seed}:${n}:${piece.halfExtents.join(',')}`;
+      let r = cache.get(key);
+      if (!r) {
+        const e = piece.halfExtents;
+        r = { shards: fractureBox(e[0], e[1], e[2], piece.material, piece.kind, piece.seed, n).shards, geometryKey: key };
+        cache.set(key, r);
+      }
+      return r;
+    },
     addShard() { live++; return next++; },
     setTransform() {},
     setDamage() {},

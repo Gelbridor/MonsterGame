@@ -7,7 +7,14 @@ import { config } from '../config';
 export async function createPhysics(): Promise<Physics> {
   // The compat build embeds the wasm; init() takes no arguments in 0.21.
   await RAPIER.init();
+  return createPhysicsWorld();
+}
 
+/**
+ * A new, independent world with the same wrapper (RAPIER must be initialised). Used for the main
+ * world and for throwaway warm-up worlds; free a throwaway one with `world.free()`.
+ */
+export function createPhysicsWorld(): Physics {
   const world = new RAPIER.World({
     x: 0,
     y: -config.physics.gravity * config.physics.gravityScale,
@@ -21,7 +28,8 @@ export async function createPhysics(): Promise<Physics> {
   const result: PhysicsStats = { bodies: 0, activeBodies: 0, joints: 0, colliders: 0, stepMs: 0 };
   let activeCount = 0;
   const countActive = (body: RAPIER.RigidBody): void => {
-    if (body.isDynamic() && !body.isSleeping()) activeCount++;
+    // pooled destruction bodies wait disabled; they are not active
+    if (body.isDynamic() && body.isEnabled() && !body.isSleeping()) activeCount++;
   };
   let stepMs = 0;
 

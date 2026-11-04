@@ -37,6 +37,8 @@ const CLADDING_STIFFNESS = 0.03;
 const PIN_K = 3e10;
 /** Most rigid aggregates in the coarse level of the preconditioner (6 coarse unknowns each). */
 const MAX_AGG = 24;
+/** Fewest pieces per coarse aggregate (on average). */
+const AGG_MIN_PIECES = 6;
 /** Height band (m) of one coarse aggregate. */
 const STOREY_BAND = 3;
 
@@ -98,10 +100,13 @@ function prepare(G: GenGraph): Prep {
     x0 = Math.min(x0, cen[i * 3]); x1 = Math.max(x1, cen[i * 3]);
     z0 = Math.min(z0, cen[i * 3 + 2]); z1 = Math.max(z1, cen[i * 3 + 2]);
   }
-  const ny = Math.max(1, Math.min(MAX_AGG, Math.ceil((ymax + 0.01) / STOREY_BAND)));
+  // at least AGG_MIN_PIECES pieces per aggregate: a coarse level as fine as the graph itself costs
+  // more (dense factor and solves) than the iterations it saves
+  const maxAgg = Math.max(1, Math.min(MAX_AGG, Math.floor(np / AGG_MIN_PIECES)));
+  const ny = Math.max(1, Math.min(maxAgg, Math.ceil((ymax + 0.01) / STOREY_BAND)));
   const alongX = x1 - x0 >= z1 - z0;
   const L = Math.max(x1 - x0, z1 - z0);
-  const nh = Math.max(1, Math.min(Math.floor(MAX_AGG / ny), Math.ceil(L / 10)));
+  const nh = Math.max(1, Math.min(Math.floor(maxAgg / ny), Math.ceil(L / 10)));
   p.aggKey = new Int32Array(np);
   for (let i = 0; i < np; i++) {
     const yb = Math.min(ny - 1, Math.floor((cen[i * 3 + 1] / (ymax + 0.01)) * ny));
@@ -142,6 +147,7 @@ export class StressSolver {
   workRun = 0;
   /** Solves run since last reset. */
   solves = 0;
+  private setupWork = 0;
 
   private loc = new Int32Array(0);
   private nodes = new Int32Array(0);
@@ -163,6 +169,24 @@ export class StressSolver {
   private Ac = new Float64Array(MAX_AGG * 6 * MAX_AGG * 6);
   private rc = new Float64Array(MAX_AGG * 6);
   private cenRef: Float64Array | null = null;
+  // ---- preconditioner reuse: a solve that resumes on the next step (same group, same topology,
+  // no contact pins) keeps its factored blocks and coarse matrix instead of rebuilding them
+  private keyOwner: unknown = null;
+  private keyVersion = -1;
+  private builtOwner: unknown = null;
+  private builtVersion = -1;
+  private builtList: unknown = null;
+  private builtN = -1;
+
+  /**
+   * Identify the next solve for preconditioner reuse: `owner` (the group) and a `version` that
+   * changes whenever its bonds or pieces change. Pass null for solves that must rebuild. The caller
+   * guarantees that the same key means the same contact pins.
+   */
+  setKey(owner: unknown, version: number): void {
+    this.keyOwner = owner;
+    this.keyVersion = version;
+  }
 
   ensure(np: number, nb: number): void {
     if (this.loc.length < np) {
@@ -239,7 +263,8 @@ export class StressSolver {
     }
     this.nBonds = nbd;
     const res: SolveResult = { iterations: 0, work: 0, converged: true, residual: 0 };
-    const maxIter = Math.max(2, Math.floor(maxWork / Math.max(1, nbd + nn)));
+    const ncEst = Math.min(MAX_AGG, P.nKeys) * 6;
+    const maxIter = Math.max(2, Math.floor(maxWork / Math.max(1, nbd + nn + (ncEst * ncEst) / 20)));
     this.maxUtil = 0;
     if (nn === 0 || !supported) {
       for (let k = 0; k < nn; k++) loc[nodes[k]] = -1;
@@ -266,8 +291,21 @@ export class StressSolver {
 
     // ---- preconditioner: block-Jacobi + rigid-aggregate coarse level
     this.cenRef = G.cen;
-    this.buildBlocks(G, P, nn, nbd);
-    this.buildCoarse(G, P, nn);
+    const reuse = this.keyOwner !== null && this.keyOwner === this.builtOwner && this.keyVersion === this.builtVersion && list === this.builtList && n === this.builtN;
+    if (!reuse) {
+      this.buildBlocks(G, P, nn, nbd);
+      this.buildCoarse(G, P, nn);
+      this.builtOwner = this.keyOwner;
+      this.builtVersion = this.keyVersion;
+      this.builtList = list;
+      this.builtN = n;
+      // setup cost in work units (the coarse factor is ~nc^3/6 multiply-adds, its solves 2 nc^2)
+      const nc = this.nAgg * 6;
+      this.setupWork = (nc * nc * nc) / 6 / 40 + nbd * 4;
+    } else {
+      this.setupWork = 0;
+    }
+    this.keyOwner = null;
 
     // ---- PCG
     this.apply(G, P, x, q, nn, nbd);
@@ -312,10 +350,12 @@ export class StressSolver {
       }
     }
     this.itersRun += it;
-    this.workRun += (it + 2) * (nbd + nn);
+    const nc = this.nAgg * 6;
+    const work = (it + 2) * (nbd + nn + (nc * nc) / 20) + this.setupWork;
+    this.workRun += work;
     this.solves++;
     res.iterations = it;
-    res.work = (it + 2) * (nbd + nn);
+    res.work = work;
     res.residual = Math.sqrt(rr) / fnorm;
     res.converged = rr <= tol2;
     if (warm) for (let k = 0; k < nn; k++) for (let d = 0; d < 6; d++) warm[nodes[k] * 6 + d] = x[k * 6 + d];

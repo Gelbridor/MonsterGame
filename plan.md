@@ -1,6 +1,6 @@
 # Monster Brawl: destruction tech demo plan
 
-Owner: @Tommy · Created 2 Nov 2026 · Last revised 3 Nov 2026 (evening)
+Owner: @Tommy · Created 2 Nov 2026 · Last revised 4 Nov 2026
 
 This is the design document. It says **what** to build and **in what order**.
 For the current state of the code, open faults and how to pick up the work, read [`handoff.md`](handoff.md).
@@ -11,7 +11,7 @@ For the current state of the code, open faults and how to pick up the work, read
 | --- | --- |
 | 1 · Foundations | Built and live on GitHub Pages. **Gate not yet formally signed off**; the owner plays the live build on a ThinkPad T480. |
 | Graphics pass (pulled forward from Phase 5) | Built and live, with two polish rounds. Small known faults remain; see `handoff.md`. |
-| 2 · Destruction core | **In progress, live as a test build.** Stress solver, crushing and progressive collapse, debug punch, piece renderer, panel tunables. Gate: punch ✅, collapse under gravity ✅, phone frame rate during a full collapse not yet measured. |
+| 2 · Destruction core | **Built; gate awaiting the owner's phone test** (branch `phase2-gate`). Stress solver with held landing loads, crushing and progressive collapse, debug punch, piece renderer, load-time warm-up, panel tunables. Gate: punch ✅, collapse under gravity ✅, full tower collapse within the CPU budget at Low in headless Chromium ✅; phone frame rate to be confirmed by the owner. |
 | Performance (cross-cutting) | GPU-aware auto quality, WebGL on integrated GPUs, dynamic render resolution and automatic tier step-down are live. Low-tier materials still need cheaper variants for integrated GPUs. |
 | 3 · Scale and performance | Not started |
 | 4 · Moves and game feel | Not started |

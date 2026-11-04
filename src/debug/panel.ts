@@ -352,6 +352,9 @@ export function createDebugUI(cfg: Config, opts?: { onRestartRequired?: (key: st
   // Accumulators for the current refresh interval.
   let physSum = 0;
   let physN = 0;
+  let destSum = 0;
+  /** Worst destruction time in one frame since the last refresh (spikes are what hitch). */
+  let destPeak = 0;
   let lastRefresh = -Infinity;
   const REFRESH_MS = 250; // ~4 Hz DOM writes
 
@@ -367,6 +370,8 @@ export function createDebugUI(cfg: Config, opts?: { onRestartRequired?: (key: st
       if (ringCount < RING) ringCount++;
     }
     physSum += s.physicsMs;
+    destSum += s.destructionMs;
+    if (s.destructionMs > destPeak) destPeak = s.destructionMs;
     physN++;
 
     const now = performance.now();
@@ -374,6 +379,10 @@ export function createDebugUI(cfg: Config, opts?: { onRestartRequired?: (key: st
     lastRefresh = now;
 
     const avgPhys = physN > 0 ? physSum / physN : 0;
+    const avgDest = physN > 0 ? destSum / physN : 0;
+    const peakDest = destPeak;
+    destSum = 0;
+    destPeak = 0;
     physSum = 0;
     physN = 0;
 
@@ -399,6 +408,7 @@ export function createDebugUI(cfg: Config, opts?: { onRestartRequired?: (key: st
       ` <span class="d">low</span> <span class="${fpsClass(lowFps)}">${lowFps.toFixed(0)}</span>\n` +
       `Frame   ${avgMs.toFixed(1)} ms\n` +
       `Physics ${avgPhys.toFixed(2)} ms x${s.physicsSteps}\n` +
+      `Destr   ${avgDest.toFixed(2)} ms <span class="d">peak</span> ${peakDest.toFixed(1)}\n` +
       `Bodies  ${s.activeBodies}/${s.bodies}\n` +
       `Joints  ${s.joints}\n` +
       `Chunks  ${s.activeChunks} <span class="d">bonds</span> ${s.liveBonds}\n` +

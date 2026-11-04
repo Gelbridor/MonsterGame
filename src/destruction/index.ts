@@ -14,6 +14,7 @@ import type { Physics, QualityPreset } from '../core/types';
 import { config } from '../config';
 import { MATERIALS } from './materials';
 import { createSleepSystem, type SleepSystem } from './sleep';
+import { generateBuilding, type GenGraph } from './building-gen';
 import {
   STATIC_BASE, SHARD_BASE, StressSolver, destroyPiece, flushSplits, gravityInFrame, pieceWorld, readPose,
   rotate, solveGroup,
@@ -28,6 +29,8 @@ export interface DestructionOptions {
   quality: QualityPreset;
   /** Static collider handles per building id (from addBuildingColliders). */
   buildingColliders: Map<number, unknown[]>;
+  /** Shared graph cache (spec id -> graph); pass the same map to a warm-up instance. */
+  graphs?: Map<number, GenGraph | null>;
 }
 
 export interface DestructionSystem extends Destruction {
@@ -39,6 +42,13 @@ export interface DestructionSystem extends Destruction {
   killPiece(specId: number, i: number, crushed?: boolean): void;
   /** Number of bonds broken during the last fixed step. */
   lastBroken(): number;
+  /**
+   * Generate and design every building's graph ahead of time (nearest to `focus` first), yielding
+   * to the event loop every `sliceMs`, so a wake only creates bodies. Call during loading.
+   */
+  prepare(focus?: { x: number; z: number }, sliceMs?: number, onProgress?: (done: number, total: number) => void): Promise<void>;
+  /** The graph cache (spec id -> graph). */
+  readonly graphs: Map<number, GenGraph | null>;
 }
 
 /**
@@ -52,6 +62,12 @@ const WAKE_ENERGY = 4e4;
 const MAX_K = 150;
 /** Share of the step's solver budget one solve may take (so one big building cannot starve the rest). */
 const MAX_SHARE_PER_SOLVE = 0.6;
+/** Apparent gravity (in g) above which a contact is a landing whose load is held until solved. */
+const LANDING_K = 3;
+/** A crushed body keeps falling only if none of its pieces is within this of the ground (m). */
+const GROUND_MARGIN = 0.15;
+/** Steps a held landing load may take to converge before it is dropped. */
+const LANDING_MAX_STEPS = 12;
 /** Extra solver work per step for landing bodies (apparent gravity above 3 g), as a multiple of the budget. */
 const IMPACT_BUDGET = 2;
 
@@ -87,7 +103,8 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     scratchQueue: new Int32Array(4096),
     splitQueue: [],
   };
-  const sleep = createSleepSystem(sim, { level: quality.level, maxActiveChunks: quality.maxActiveChunks });
+  const graphs = opts.graphs ?? new Map<number, GenGraph | null>();
+  const sleep = createSleepSystem(sim, { level: quality.level, maxActiveChunks: quality.maxActiveChunks, graphs });
   sim.solver.ensure(1024, 4096);
 
   // Tag every sleeping building's static colliders so impacts on them wake the building.
@@ -161,7 +178,11 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
         }
         continue;
       }
-      if (code >= SHARD_BASE) continue;
+      if (code >= SHARD_BASE) {
+        // a building piece bearing on loose debris: the debris may be crushed under it
+        if (other !== undefined && other < SHARD_BASE) sleep.loadShard(code - SHARD_BASE, mag);
+        continue;
+      }
       const bld = sim.buildings.get(Math.floor(code / 4096));
       if (!bld) continue;
       const i = code % 4096;
@@ -175,11 +196,19 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
         const oh = side === 0 ? h2 : h1;
         const col = world.getCollider(oh);
         if (col) {
+          // the contact force's own direction (a column standing on a wide slab is pushed straight
+          // up even though the centres are side by side); the centres only pick its sign
           const t = col.translation();
           pieceWorld(G, i, tmp);
-          dx = tmp[0] - t.x; dy = tmp[1] - t.y; dz = tmp[2] - t.z;
-          const l = Math.hypot(dx, dy, dz) || 1;
-          dx /= l; dy /= l; dz /= l;
+          const gx = tmp[0] - t.x, gy = tmp[1] - t.y, gz = tmp[2] - t.z;
+          const lf = Math.hypot(fx, fy, fz);
+          if (lf > 0) {
+            const sg = fx * gx + fy * gy + fz * gz < 0 ? -1 : 1;
+            dx = (sg * fx) / lf; dy = (sg * fy) / lf; dz = (sg * fz) / lf;
+          } else {
+            const l = Math.hypot(gx, gy, gz) || 1;
+            dx = gx / l; dy = gy / l; dz = gz / l;
+          }
         }
       } else {
         // the ground, rubble or a sleeping building: it is below and pushes up
@@ -230,6 +259,30 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     }
   };
 
+  /**
+   * The members that stopped this body were crushed: they could not stop it. It keeps the momentum
+   * it had before the contact (pv), less the work done crushing them.
+   */
+  const keepMomentum = (G: Group, pvx: number, pvy: number, pvz: number): void => {
+    // not when what is left already bears on the ground: the ground stops it, whatever was crushed
+    const c = G.cur, g = G.bld.graph;
+    const qx = c[3], qy = c[4], qz = c[5], qw = c[6];
+    // |row y| of the rotation matrix: a box's vertical half-extent is sum |R1k| h_k
+    const r10 = Math.abs(2 * (qx * qy + qw * qz)), r11 = Math.abs(1 - 2 * (qx * qx + qz * qz)), r12 = Math.abs(2 * (qy * qz - qw * qx));
+    for (const i of G.pieces) {
+      pieceWorld(G, i, tmp);
+      const h = g.pieces[i].halfExtents;
+      if (tmp[1] - (r10 * h[0] + r11 * h[1] + r12 * h[2]) < GROUND_MARGIN) return;
+    }
+    const lv = G.body.linvel();
+    const lost = 0.5 * G.mass * (pvx * pvx + pvy * pvy + pvz * pvz - (lv.x * lv.x + lv.y * lv.y + lv.z * lv.z));
+    if (lost <= 0) return;
+    const keep = Math.sqrt(Math.max(0, 1 - sim.crushEnergy / lost));
+    const nv = { x: lv.x + (pvx - lv.x) * keep, y: lv.y + (pvy - lv.y) * keep, z: lv.z + (pvz - lv.z) * keep };
+    G.body.setLinvel(nv, true);
+    G.vx = nv.x; G.vy = nv.y; G.vz = nv.z;
+  };
+
   const fixedUpdate = (dt: number): void => {
     sim.step++;
     sim.time += dt;
@@ -238,14 +291,19 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     sim.brokenThisStep = 0;
     const scale = config.destruction.bondStrengthScale;
 
+    const prof = sim.prof;
+    let tp = prof ? performance.now() : 0;
+    const mark = (k: string): void => { if (!prof) return; const t = performance.now(); prof[k] = (prof[k] ?? 0) + t - tp; tp = t; };
     impactCodes.length = 0;
     physics.drainContactForces(onForce);
+    mark('contacts');
     for (let k = 0; k < wakeQueue.length; k++) wakeBuilding(wakeQueue[k]);
     wakeQueue.length = 0;
     while (lazyWake.length > 0) {
       const id = lazyWake.shift()!;
       if (!sim.buildings.has(id)) { wakeBuilding(id); break; }
     }
+    mark('wake');
 
     const groups = sim.groups;
     const n = groups.length;
@@ -261,19 +319,34 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
       if (!G.live) continue;
       const bld = G.bld;
       if (G.fixed) {
-        if (G.dirty || G.hitStep === sim.step) {
-          const useExt = G.hitStep === sim.step;
+        const hit = G.hitStep === sim.step;
+        if (hit) {
+          // hold the peak contact load on each piece until a solve with it converges: a landing on
+          // this structure lasts a step or two, its solve may need several steps' budget
+          const H = bld.extHold;
+          for (const i of G.pieces) {
+            const ex = bld.ext[i * 3], ey = bld.ext[i * 3 + 1], ez = bld.ext[i * 3 + 2];
+            if (ex * ex + ey * ey + ez * ez > H[i * 3] ** 2 + H[i * 3 + 1] ** 2 + H[i * 3 + 2] ** 2) { H[i * 3] = ex; H[i * 3 + 1] = ey; H[i * 3 + 2] = ez; }
+          }
+          G.holding = true;
+        }
+        if (G.dirty || G.holding) {
           if (budget > 0) {
+            if (G.holding) for (const i of G.pieces) { bld.ext[i * 3] = bld.extHold[i * 3]; bld.ext[i * 3 + 1] = bld.extHold[i * 3 + 1]; bld.ext[i * 3 + 2] = bld.extHold[i * 3 + 2]; }
             const before = sim.solver.workRun;
-            const broke = solveGroup(sim, G, 0, -sim.g, 0, scale, useExt, Math.min(budget, budget0 * MAX_SHARE_PER_SOLVE));
+            const broke = solveGroup(sim, G, 0, -sim.g, 0, scale, G.holding, Math.min(budget, budget0 * MAX_SHARE_PER_SOLVE));
             budget -= sim.solver.workRun - before;
             // unconverged (-1): stay dirty, the warm start resumes next step; broke > 0: re-solve
             G.dirty = broke !== 0;
+            if (broke >= 0) {
+              for (const i of G.pieces) { bld.extHold[i * 3] = 0; bld.extHold[i * 3 + 1] = 0; bld.extHold[i * 3 + 2] = 0; }
+              G.holding = false;
+            }
           } else {
             G.dirty = true;
           }
-          if (useExt) for (const i of G.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
         }
+        if (hit || G.holding) for (const i of G.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
         continue;
       }
       const body = G.body;
@@ -288,6 +361,7 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
       const pvx = G.vx, pvy = G.vy, pvz = G.vz;
       G.vx = lv.x; G.vy = lv.y; G.vz = lv.z;
       if (sim.trace && G.pieces.length > 20) sim.trace(`step ${sim.step} g${G.id} ${G.pieces.length}p y=${G.cur[1].toFixed(2)} vy=${lv.y.toFixed(2)} hit=${G.hitStep === sim.step}`);
+      if (G.land && G.land.pieces !== G.pieces) G.land = null; // it split: the held load no longer applies
       if (G.hitStep === sim.step) {
         // apparent gravity = g - a (in the group's own frame)
         let wx = -ax, wy = -sim.g - ay, wz = -az;
@@ -301,38 +375,58 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
         const extRatio = Math.sqrt(ext2) / (G.mass * sim.g);
         if (G.pieces.length === 1) {
           crushLoosePiece(G, Math.sqrt(ext2), scale);
-        } else if ((kfac > 1.3 || extRatio > 0.3 || (sim.step + G.id) % 4 === 0) && (budget > 0 || (kfac > 3 && impactBudget > 0))) {
+        } else if ((kfac > LANDING_K && (!G.land || kfac > G.land.k)) || (!G.land && (kfac > 1.3 || extRatio > 0.3 || (sim.step + G.id) % 4 === 0))) {
+          // hold this load (apparent gravity, contact loads and pins) and solve it, now and on the
+          // next steps if need be: pins change from step to step, so an unheld solve on a resting
+          // or landing body never converges. A harder landing replaces a held load.
           const gl = gravityInFrame(G, wx, wy, wz);
-          const before = sim.solver.workRun;
-          sim.crushEnergy = 0;
-          const landing = kfac > 3 && impactBudget > 0;
-          solveGroup(sim, G, gl[0], gl[1], gl[2], scale, true, landing ? impactBudget : Math.min(budget, budget0 * MAX_SHARE_PER_SOLVE));
-          if (landing) impactBudget -= sim.solver.workRun - before;
-          else budget -= sim.solver.workRun - before;
-          if (sim.crushEnergy > 0 && G.live) {
-            // The members that stopped this body were crushed: they could not stop it. It keeps
-            // the momentum it had before the contact, less the work done crushing them.
-            const lost = 0.5 * G.mass * (pvx * pvx + pvy * pvy + pvz * pvz - (lv.x * lv.x + lv.y * lv.y + lv.z * lv.z));
-            if (lost > 0) {
-              const keep = Math.sqrt(Math.max(0, 1 - sim.crushEnergy / lost));
-              const nv = { x: lv.x + (pvx - lv.x) * keep, y: lv.y + (pvy - lv.y) * keep, z: lv.z + (pvz - lv.z) * keep };
-              body.setLinvel(nv, true);
-              G.vx = nv.x; G.vy = nv.y; G.vz = nv.z;
-            }
+          const L = G.land ?? { pieces: G.pieces, gx: 0, gy: 0, gz: 0, ext: new Float32Array(G.pieces.length * 3), pins: [], pvx, pvy, pvz, k: 0, steps: 0 };
+          if (L.ext.length < G.pieces.length * 3) L.ext = new Float32Array(G.pieces.length * 3);
+          L.pieces = G.pieces; L.gx = gl[0]; L.gy = gl[1]; L.gz = gl[2]; L.k = kfac; L.steps = 0;
+          L.pvx = pvx; L.pvy = pvy; L.pvz = pvz;
+          L.pins.length = 0;
+          for (let k = 0; k < G.pieces.length; k++) {
+            const i = G.pieces[k];
+            L.ext[k * 3] = bld.ext[i * 3]; L.ext[k * 3 + 1] = bld.ext[i * 3 + 1]; L.ext[k * 3 + 2] = bld.ext[i * 3 + 2];
+            if (bld.srcStamp[i] === sim.step) L.pins.push(i);
           }
+          G.land = L;
         }
         if (G.live) for (const i of G.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
+      }
+      const L = G.land;
+      const landing = L !== null && L.k > LANDING_K;
+      if (G.live && L && (landing ? impactBudget : budget) > 0) {
+        // solve the held load (warm-started, preconditioner kept): converged -> bonds break
+        for (let k = 0; k < L.pieces.length; k++) {
+          const i = L.pieces[k];
+          bld.ext[i * 3] = L.ext[k * 3]; bld.ext[i * 3 + 1] = L.ext[k * 3 + 1]; bld.ext[i * 3 + 2] = L.ext[k * 3 + 2];
+        }
+        for (const i of L.pins) bld.srcStamp[i] = sim.step;
+        const before = sim.solver.workRun;
+        sim.crushEnergy = 0;
+        const r = solveGroup(sim, G, L.gx, L.gy, L.gz, scale, true, landing ? impactBudget : Math.min(budget, budget0 * MAX_SHARE_PER_SOLVE));
+        if (landing) impactBudget -= sim.solver.workRun - before;
+        else budget -= sim.solver.workRun - before;
+        for (const i of L.pieces) { bld.ext[i * 3] = 0; bld.ext[i * 3 + 1] = 0; bld.ext[i * 3 + 2] = 0; }
+        L.steps++;
+        if (r >= 0 || L.steps > LANDING_MAX_STEPS) {
+          if (G.land === L) G.land = null;
+          if (sim.crushEnergy > 0 && G.live) keepMomentum(G, L.pvx, L.pvy, L.pvz);
+        }
       }
     }
 
     {
       const w = sim.solver.workRun - work0;
-      if (w > 2000) {
+      // learn the real cost from every step that solved (small Low-tier solves included)
+      if (w > 0) {
         const m = (performance.now() - tSolve0) / w;
-        msPerWork += (Math.min(5e-3, Math.max(2e-5, m)) - msPerWork) * 0.2;
+        msPerWork += (Math.min(5e-3, Math.max(2e-5, m)) - msPerWork) * Math.min(0.5, 0.05 + w / 20000);
       }
     }
 
+    mark('solve');
     // impact damage: absorbed kinetic energy
     for (let k = 0; k < impactCodes.length; k++) {
       const code = impactCodes[k];
@@ -347,10 +441,13 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
       if (bld.health[i] <= 0) { sim.impactKillsTotal++; destroyPiece(sim, bld, i, push0); }
       else sim.renderer.setDamage(bld.handle[i], 1 - bld.health[i] / piece.maxHealth);
     }
+    mark('impact');
     flushSplits(sim);
-
+    mark('split');
     sleep.update(dt);
+    mark('debris');
     sleep.enforceCap();
+    mark('cap');
     lastBroken.n = sim.brokenThisStep;
   };
 
@@ -532,9 +629,27 @@ export function createDestruction(opts: DestructionOptions): DestructionSystem {
     return statsOut;
   };
 
+  const prepare = async (focus = { x: 0, z: 0 }, sliceMs = 12, onProgress?: (done: number, total: number) => void): Promise<void> => {
+    const todo = specs.filter((s) => !graphs.has(s.id));
+    todo.sort((a, b) => Math.hypot(a.x - focus.x, a.z - focus.z) - Math.hypot(b.x - focus.x, b.z - focus.z));
+    let t0 = performance.now();
+    for (let k = 0; k < todo.length; k++) {
+      const s = todo[k];
+      if (!graphs.has(s.id)) graphs.set(s.id, generateBuilding(s, quality.level));
+      if (performance.now() - t0 > sliceMs) {
+        onProgress?.(k + 1, todo.length);
+        await new Promise((r) => setTimeout(r, 0));
+        t0 = performance.now();
+      }
+    }
+    onProgress?.(todo.length, todo.length);
+  };
+
   return {
     sim,
     sleep,
+    graphs,
+    prepare,
     applyDamage,
     fixedUpdate,
     syncVisual,

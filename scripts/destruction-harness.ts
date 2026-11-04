@@ -8,6 +8,7 @@ import { config } from '../src/config';
 import { createDestruction, type DestructionSystem } from '../src/destruction';
 import { createNullRenderer } from '../src/destruction/debug-render';
 import { fractureBox } from '../src/destruction/fracture';
+import { warmUpDestruction } from '../src/destruction/warmup';
 import { pieceWorld, type Group } from '../src/destruction/joints';
 import type { QualityLevel } from '../src/core/types';
 import type { BuildingSpec } from '../src/city/town-layout';
@@ -23,8 +24,18 @@ async function setup(level: QualityLevel) {
   for (const s of layout.specs) addBuildingColliders(s, physics);
   const quality = getQualityPreset(level);
   const t0 = performance.now();
-  const d = createDestruction({ physics, renderer: createNullRenderer(), specs: layout.specs, quality, buildingColliders });
+  const tier = ['low', 'medium', 'high', 'ultra'].indexOf(level);
+  const d = createDestruction({ physics, renderer: createNullRenderer(tier), specs: layout.specs, quality, buildingColliders });
   const initMs = performance.now() - t0;
+  // as the game does at load (COLD=1 skips it): every graph generated ahead, then the warm-up
+  let prepMs = 0, warmMs = 0;
+  if (!process.env.COLD) {
+    const tp = performance.now();
+    await d.prepare();
+    prepMs = performance.now() - tp;
+    warmMs = warmUpDestruction(layout.specs, quality, d.graphs);
+  }
+  if (process.env.VERBOSE) console.log(`setup ${level}: init ${fmt(initMs, 0)} ms, graphs ${fmt(prepMs, 0)} ms, warm-up ${fmt(warmMs, 0)} ms`);
   return { physics, layout, d, quality, initMs };
 }
 type Env = Awaited<ReturnType<typeof setup>>;
@@ -173,7 +184,15 @@ function runCollapse(env: Env, spec: BuildingSpec, mode: 'cols' | 'side' | 'all'
   const steps = Math.round(seconds / DT);
   const per = Math.max(1, Math.round((Number(process.env.EVERY) || every) / DT));
   for (let s = 1; s <= steps; s++) {
+    const ys = new Map<number, number>();
+    if (process.env.UNDER) for (const G of env.d.sim.groups) if (G.bld === b && !G.fixed) ys.set(G.id, G.cur[1]);
     stepN(env, 1, tm);
+    if (process.env.UNDER) for (const G of env.d.sim.groups) {
+      if (G.bld !== b || G.fixed) continue;
+      let lo = Infinity;
+      for (const i of G.pieces) { pieceWorld(G, i, tmp); lo = Math.min(lo, tmp[1]); }
+      if (lo < -0.5 && !(G as any)._rep) { (G as any)._rep = 1; const lv = G.body.linvel(); console.log(`  UNDER step ${s} g${G.id} ${G.pieces.length}p comY ${fmt(G.cur[1], 2)} (prev ${fmt(ys.get(G.id) ?? NaN, 2)}) lowest piece centre ${fmt(lo, 2)} v=(${fmt(lv.x, 1)},${fmt(lv.y, 1)},${fmt(lv.z, 1)}) born ${fmt(G.born, 2)}`); }
+    }
     maxChunks = Math.max(maxChunks, env.d.stats().activeChunks);
     if (s % per === 0) {
       const st = env.d.stats();
@@ -412,7 +431,17 @@ async function t8(): Promise<void> {
     const t0 = performance.now();
     env.d.applyDamage({ shape: { kind: 'sphere', center: p, radius: config.destruction.punchRadius }, damage: config.destruction.punchDamage, impulse: config.destruction.punchImpulse });
     const tm = newTimes();
-    stepN(env, 60, tm);
+    const profs: string[] = [];
+    for (let k = 0; k < 60; k++) {
+      env.d.sim.prof = {};
+      const sv = env.d.sim.solver; const s0 = sv.solves, w0 = sv.workRun;
+      stepN(env, 1, tm);
+      const sp = (globalThis as any).__sp; if (sp && sv.solves > s0) Object.assign(env.d.sim.prof, { blk: sp.blocks, crs: sp.coarse, pcg: sp.pcg, it: sp.it, nn: sp.nn, agg: sp.nAgg });
+      env.d.sim.prof.nSolves = sv.solves - s0; env.d.sim.prof.kWork = (sv.workRun - w0) / 1000;
+      if (tm.simArr[k] > 2) profs.push(`s${k}:` + Object.entries(env.d.sim.prof).filter(([, v]) => v > 0.2).map(([n, v]) => `${n} ${fmt(v, 1)}`).join(','));
+    }
+    env.d.sim.prof = undefined;
+    if (profs.length) console.log('   slow sim steps: ' + profs.join(' | '));
     console.log(`terrace ${spec.id}: punch ${fmt(performance.now() - t0 - tm.phys - tm.sim, 1)} ms; first 6 steps (phys+sim): ` + tm.physArr.slice(0, 6).map((v, i) => fmt(v + tm.simArr[i], 1)).join(' ') + ` | max ${fmt(tm.maxPhys, 1)}+${fmt(tm.maxSim, 1)}`);
   }
 }

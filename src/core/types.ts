@@ -174,6 +174,8 @@ export interface FrameStats {
   fps: number;
   frameMs: number;
   physicsMs: number;
+  /** Destruction sim time (ms) summed over this frame's fixed steps. */
+  destructionMs: number;
   physicsSteps: number;
   bodies: number;
   activeBodies: number;
